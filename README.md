@@ -22,6 +22,8 @@ supply…) on one screen — draw as many trend lines, Fibonacci levels, channel
 - **Macro data:** FRED, ISM (PMI, New Orders, Inventories, Employment), Turkish central bank EVDS (M1, M2 and any series).
 - **Your own data:** drag & drop a CSV file onto the chart.
 - **Chart style:** candle / line colors, background, grid, last price line, pre-market / after-hours colors — with opacity.
+- **Claude connector:** ask Claude to read your charts and watchlist, draw support / resistance, trend lines and
+  Fibonacci levels, or switch the chart you are looking at — changes show up in the open chart right away.
 - **No console window (Windows):** an icon next to the clock with a right-click menu — open, restart, refresh data,
   log file, folder, desktop / Start menu shortcut, start with Windows, exit.
 
@@ -48,6 +50,45 @@ python3 server.py --open
 
 The server only listens on `127.0.0.1`, so other computers cannot reach it. Your personal data (drawings, watchlist,
 settings, EVDS key) lives in the `data/` folder and is never committed to git.
+
+## Claude connector
+
+`mcp_server.py` is an [MCP](https://modelcontextprotocol.io) server that connects Guraydingview to Claude (the Claude
+desktop app or Claude Code). It uses your Claude plan; no API key is needed.
+
+**Claude desktop app:**
+
+```bash
+python mcp_server.py --install
+```
+
+Then quit Claude completely (tray icon → Quit) and open it again. `--uninstall` removes it. The installer edits
+Claude's `claude_desktop_config.json` and keeps a `.guraydingview.bak` copy next to it; you can also add the entry by
+hand (Settings → Developer → Edit Config):
+
+```json
+"mcpServers": { "guraydingview": { "command": "python", "args": ["C:\\path\\to\\guraydingview\\mcp_server.py"] } }
+```
+
+**Claude Code:** `claude mcp add --scope user guraydingview -- python /path/to/guraydingview/mcp_server.py`
+
+If Guraydingview is not running, the connector starts it. What Claude can do:
+
+| Tool | |
+|---|---|
+| `get_bars` | price / data history of any symbol and interval |
+| `get_quotes` | latest values, including pre-market / after hours |
+| `search_symbols` | find tickers |
+| `get_watchlist`, `edit_watchlist` | read the watchlist; add, move, remove symbols and sections |
+| `list_drawings`, `add_drawings`, `update_drawings`, `delete_drawings` | read and draw trend lines, levels, channels, boxes, Fibonacci, date ranges, notes |
+| `open_chart` | switch your open chart to a symbol / interval |
+
+Try: *"Draw the main support and resistance levels on GOOGL's weekly chart"*, *"Mark the periods when USBCOI was
+below 50"*, *"How did BTC do while the Fed balance sheet (WALCL) was shrinking?"*, *"Summarize today's moves in my
+watchlist"*.
+
+Drawings Claude adds are marked as Claude's; open charts update right away and **Ctrl+Z** in the chart takes a change
+back. Claude's comments are not investment advice.
 
 ## Symbols
 

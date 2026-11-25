@@ -1261,6 +1261,26 @@ def sym_key(s):
 REV_KEY = "__rev__"  # per-symbol revision numbers inside drawings.json
 
 
+# ----------------------------------------------------------------------------
+# Live updates: open chart tabs listen on /api/events (server-sent events). When drawings or the watchlist
+# change from somewhere else (another tab, the Claude connector), or Claude asks to show a chart, the tabs
+# hear about it right away.
+# ----------------------------------------------------------------------------
+_ev_cond = threading.Condition()
+_ev = {"seq": 0, "log": [], "clients": 0, "closing": False}
+
+
+def publish(event):
+    with _ev_cond:
+        _ev["seq"] += 1
+        _ev["log"] = (_ev["log"] + [(_ev["seq"], event)])[-200:]
+        _ev_cond.notify_all()
+
+
+def drawing_revs():
+    return {k: int(v) for k, v in read_json(DRAWINGS_FILE, {}).get(REV_KEY, {}).items()}
+
+
 def save_csv(symbol, raw):
     """Validate a drag & dropped CSV and save it as data/csv/SYMBOL.csv."""
     name = re.sub(r"[^A-Z0-9_.\-]", "", sym_key(symbol).replace("/", "_"))
@@ -1354,9 +1374,47 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         self._cacheable = False
         u = urllib.parse.urlsplit(self.path)
+        if u.path == "/api/events" and not self.blocked("GET"):
+            return self.events()
         if u.path.startswith("/api/"):
             return self.api("GET", u)
         return super().do_GET()
+
+    def send_event(self, obj):
+        self.wfile.write(b"data: " + json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n\n")
+        self.wfile.flush()
+
+    def events(self):
+        """Server-sent events stream for an open chart tab (one long-lived connection per tab)."""
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        with _ev_cond:
+            _ev["clients"] += 1
+            seq = _ev["seq"]
+        try:
+            self.end_headers()
+            self.wfile.write(b"retry: 3000\n\n")
+            # on (re)connect: current drawing revisions, so the tab catches up on anything it missed
+            self.send_event({"type": "hello", "revs": drawing_revs()})
+            while True:
+                with _ev_cond:
+                    _ev_cond.wait_for(lambda: _ev["seq"] > seq or _ev["closing"], timeout=15)
+                    if _ev["closing"]:
+                        return
+                    new = [e for s, e in _ev["log"] if s > seq]
+                    seq = _ev["seq"]
+                if new:
+                    for e in new:
+                        self.send_event(e)
+                else:
+                    self.wfile.write(b": ping\n\n")  # keep-alive; also notices a closed tab
+                    self.wfile.flush()
+        except (ConnectionError, OSError):
+            pass  # tab closed
+        finally:
+            with _ev_cond:
+                _ev["clients"] -= 1
 
     def do_POST(self):
         u = urllib.parse.urlsplit(self.path)
@@ -1399,6 +1457,7 @@ class Handler(SimpleHTTPRequestHandler):
                     if not isinstance(wl, dict) or not isinstance(wl.get("groups"), list):
                         return self.send_json({"error": "invalid list"}, 400)
                     write_json(WATCHLIST_FILE, wl)
+                    publish({"type": "watchlist", "src": self.headers.get("X-Client-Id", "")})
                     return self.send_json({"ok": True})
                 return self.send_json(read_json(WATCHLIST_FILE, DEFAULT_WATCHLIST))
             if u.path == "/api/drawings":
@@ -1423,6 +1482,7 @@ class Handler(SimpleHTTPRequestHandler):
                             data.pop(key, None)
                         revs[key] = cur + 1
                         write_json(DRAWINGS_FILE, data)
+                    publish({"type": "drawings", "sym": key, "rev": cur + 1, "src": self.headers.get("X-Client-Id", "")})
                     return self.send_json({"ok": True, "count": len(items), "rev": cur + 1})
                 data = read_json(DRAWINGS_FILE, {})
                 if not key:
@@ -1455,7 +1515,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(evds_test())
             if u.path == "/api/evds/find":
                 return self.send_json(evds_find(sym_key(arg("seed"))))
-            return self.send_json({"error": "bilinmeyen adres"}, 404)
+            if u.path == "/api/show" and method == "POST":
+                # switch the open chart tab to a symbol (used by the Claude connector)
+                iv = arg("interval")
+                publish({"type": "show", "symbol": sym_key(arg("symbol")), "interval": iv if iv in INTERVALS else ""})
+                with _ev_cond:
+                    return self.send_json({"ok": True, "tabs": _ev["clients"]})
+            return self.send_json({"error": "unknown endpoint"}, 404)
         except SymbolError as e:
             return self.send_json({"error": str(e)}, 404)
         except ConnectionError:
@@ -1475,6 +1541,17 @@ class QuietServer(ThreadingHTTPServer):
         if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
+
+    def shutdown(self):
+        with _ev_cond:  # end the open event streams too, so a restart is not held up by them
+            _ev["closing"] = True
+            _ev_cond.notify_all()
+        super().shutdown()
+
+    def server_activate(self):
+        with _ev_cond:
+            _ev["closing"] = False
+        super().server_activate()
 
     def handle_error(self, request, client_address):
         # no traceback for connections the browser aborted (WinError 10053/10054)

@@ -81,9 +81,12 @@ const store = {
   set(k, v) { try { localStorage.setItem('gm.' + k, JSON.stringify(v)); } catch (_) { /* ignore */ } },
 };
 
+// identifies this tab in the server's live updates, so it can ignore the echo of its own saves
+const clientId = Math.random().toString(36).slice(2, 10);
+
 async function api(path, opts = {}) {
   // custom header on POSTs: the server uses it to reject requests coming from other websites
-  if (opts.method && opts.method !== 'GET') opts.headers = { 'X-Guraydingview': '1', 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (opts.method && opts.method !== 'GET') opts.headers = { 'X-Guraydingview': '1', 'X-Client-Id': clientId, 'Content-Type': 'application/json', ...(opts.headers || {}) };
   const r = await fetch(path, opts);
   let j = null;
   try { j = await r.json(); } catch (_) { /* empty body */ }
@@ -412,18 +415,65 @@ async function flushSave() {
   }
 }
 
-if (drawChannel) {
-  drawChannel.onmessage = async ({ data }) => {
-    if (!data || drawRev[data.sym] === data.rev) return;
-    delete drawCache[data.sym];
-    if (symKey(state.symbol) === data.sym && !saveSym) engine.load(await loadDrawings(data.sym));
+// the drawings of a symbol were changed somewhere else (another tab or the Claude connector)
+async function externalDrawings(sym, rev) {
+  if (drawRev[sym] === rev) return;
+  delete drawCache[sym];
+  if (symKey(state.symbol) !== sym || saveSym || drawFailed[sym]) return;
+  const list = await loadDrawings(sym);
+  if (symKey(state.symbol) !== sym || saveSym) return;
+  engine.applyExternal(list); // Ctrl+Z takes the change back
+  updateDrawCount();
+  updateUndo();
+}
+
+if (drawChannel) drawChannel.onmessage = ({ data }) => { if (data) externalDrawings(data.sym, data.rev); };
+
+// the most recently used tab is the one that follows "show this chart" requests from Claude
+function markActiveTab() { if (document.visibilityState === 'visible') store.set('activeTab', clientId); }
+window.addEventListener('focus', markActiveTab);
+document.addEventListener('visibilitychange', markActiveTab);
+window.addEventListener('beforeunload', () => { if (store.get('activeTab', null) === clientId) store.set('activeTab', null); });
+markActiveTab();
+
+function showChart(sym, iv) {
+  sym = symKey(sym);
+  let changed = false;
+  if (['15m', '1h', '4h', '1d', '1w', '1M'].includes(iv) && iv !== state.interval) {
+    state.interval = iv;
+    store.set('interval', iv);
+    renderIntervals();
+    changed = true;
+  }
+  if (sym && sym !== symKey(state.symbol)) {
+    state.symbol = sym;
+    store.set('symbol', sym);
+    engine.setTool('cursor');
+    changed = true;
+  }
+  if (changed) { loadChart(); renderWatchlist(); }
+}
+
+// live updates from the server (/api/events)
+if ('EventSource' in window) {
+  new EventSource('/api/events').onmessage = ({ data }) => {
+    let ev;
+    try { ev = JSON.parse(data); } catch (_) { return; }
+    if (ev.type === 'hello') { // (re)connected: catch up on changes made while disconnected
+      for (const [k, rev] of Object.entries(ev.revs || {})) if (k in drawRev && drawRev[k] !== rev) externalDrawings(k, rev);
+    } else if (ev.type === 'drawings' && ev.src !== clientId) externalDrawings(ev.sym, ev.rev);
+    else if (ev.type === 'watchlist' && ev.src !== clientId) loadWatchlist();
+    else if (ev.type === 'show') {
+      const active = store.get('activeTab', null);
+      if (!active || active === clientId) showChart(ev.symbol, ev.interval);
+    }
   };
 }
 
 window.addEventListener('beforeunload', () => {
   if (saveSym) {
     fetch(`/api/drawings?symbol=${enc(saveSym)}`, {
-      method: 'POST', keepalive: true, headers: { 'X-Guraydingview': '1', 'Content-Type': 'application/json' },
+      method: 'POST', keepalive: true, headers: { 'X-Guraydingview': '1', 'X-Client-Id': clientId, 'Content-Type': 'application/json' },
       body: JSON.stringify({ items: drawCache[saveSym] || [], rev: drawRev[saveSym] ?? 0 }),
     });
   }

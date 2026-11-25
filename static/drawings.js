@@ -224,6 +224,26 @@ export class DrawingEngine {
     this.request();
   }
 
+  // The drawings were changed somewhere else (another tab, the Claude connector): show the new list but keep the
+  // undo history, so Ctrl+Z takes the change back. Nothing is saved here (onChange is not called).
+  applyExternal(list) {
+    if (this.creating) this._cancelCreate();
+    this.drag = null;
+    const snap = this._snapshot();
+    const temp = this.drawings.filter((d) => d.temp);
+    this.drawings = (Array.isArray(list) ? list : []).filter((d) => d && d.type && Array.isArray(d.pts));
+    this.drawings.forEach((d) => { if (!d.id) d.id = uid(); });
+    this.drawings.push(...temp);
+    if (snap !== this._snapshot()) {
+      this.undoStack.push(snap);
+      if (this.undoStack.length > 300) this.undoStack.shift();
+      this.redoStack = [];
+    }
+    this._co = null;
+    if (!this.selected()) { this.selectedId = null; this.onSelect(null); } else this.onSelect(this.selected());
+    this.request();
+  }
+
   getDrawings() { return clone(this.drawings.filter((d) => !d.temp)); }
   selected() { return this.drawings.find((d) => d.id === this.selectedId) || null; }
 
