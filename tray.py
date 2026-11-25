@@ -252,10 +252,16 @@ shell32.Shell_NotifyIconW.argtypes = [wt.DWORD, ctypes.POINTER(NOTIFYICONDATAW)]
 shell32.Shell_NotifyIconW.restype = wt.BOOL
 kernel32.GetModuleHandleW.argtypes = [wt.LPCWSTR]
 kernel32.GetModuleHandleW.restype = wt.HMODULE
+kernel32.CreateMutexW.argtypes = [wt.LPVOID, wt.BOOL, wt.LPCWSTR]
+kernel32.CreateMutexW.restype = wt.HANDLE
+user32.FindWindowW.argtypes = [wt.LPCWSTR, wt.LPCWSTR]
+user32.FindWindowW.restype = wt.HWND
 
 WM_DESTROY, WM_COMMAND, WM_APP = 0x0002, 0x0111, 0x8000
 WM_LBUTTONUP, WM_RBUTTONUP = 0x0202, 0x0205
 CALLBACK = WM_APP + 1
+WM_ALREADY_RUNNING = WM_APP + 2  # sent by a second launch to the running instance
+ERROR_ALREADY_EXISTS = 183
 NIM_ADD, NIM_MODIFY, NIM_DELETE = 0, 1, 2
 NIF_MESSAGE, NIF_ICON, NIF_TIP, NIF_INFO = 0x1, 0x2, 0x4, 0x10
 MF_SEPARATOR, MF_GRAYED, MF_CHECKED = 0x800, 0x1, 0x8
@@ -263,7 +269,17 @@ TPM_RIGHTBUTTON, TPM_RETURNCMD, TPM_NONOTIFY, TPM_BOTTOMALIGN = 0x2, 0x100, 0x80
 
 (CMD_OPEN, CMD_RESTART, CMD_REFRESH, CMD_LOG, CMD_FOLDER, CMD_AUTOSTART, CMD_EXIT,
  CMD_DESKTOP, CMD_STARTMENU) = range(1, 10)
-WINDOW_CLASS = "GuraydingviewTray"
+WINDOW_CLASS = f"GuraydingviewTray-{server.PORT}"  # one instance per port
+MUTEX_NAME = f"Local\\GuraydingviewTray-{server.PORT}"
+_mutex = None
+
+
+def another_instance_running():
+    """True if this app is already running for this port (named mutex, held for the process lifetime)."""
+    global _mutex
+    ctypes.set_last_error(0)
+    _mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+    return ctypes.get_last_error() == ERROR_ALREADY_EXISTS
 
 
 class Tray:
@@ -338,7 +354,8 @@ class Tray:
 
     # ---- menu commands
     def open(self):
-        webbrowser.open(self.url)
+        if not os.environ.get("GV_NO_BROWSER"):  # for automated tests
+            webbrowser.open(self.url)
 
     def restart(self):
         print("Restarting…")
@@ -426,6 +443,11 @@ class Tray:
         if msg == WM_COMMAND:  # menu commands also work as window messages
             self.run((wparam or 0) & 0xFFFF)
             return 0
+        if msg == WM_ALREADY_RUNNING:  # someone launched the app again: show this one instead
+            print("Second launch: already running")
+            self.open()
+            self.notify(f"{APP} is already running", "Opened it in your browser · right-click the icon for options.")
+            return 0
         if msg == CALLBACK:
             ev = (lparam or 0) & 0xFFFF
             if ev == WM_RBUTTONUP:
@@ -451,6 +473,16 @@ class Tray:
 
 def main():
     args = sys.argv[1:]
+    # second launch: tell the running instance (it opens the browser and shows "already running"), then quit.
+    # A restart spawns its replacement while still holding the mutex, so --restarted skips this check.
+    if another_instance_running() and "--restarted" not in args:
+        hwnd = user32.FindWindowW(WINDOW_CLASS, None)
+        print("Already running — " + ("notified the running instance" if hwnd else "running instance not found"))
+        if hwnd:
+            user32.PostMessageW(hwnd, WM_ALREADY_RUNNING, 0, 0)
+        elif not os.environ.get("GV_NO_BROWSER"):
+            webbrowser.open(f"http://{server.HOST}:{server.PORT}/")
+        return
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)  # crisp menu on high-DPI screens
     except Exception:

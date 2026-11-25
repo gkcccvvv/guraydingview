@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import sys
 import threading
 import time
@@ -1466,6 +1467,14 @@ class Handler(SimpleHTTPRequestHandler):
 
 class QuietServer(ThreadingHTTPServer):
     daemon_threads = True
+    # On Windows SO_REUSEADDR lets a second server bind the same port, so a second launch would silently
+    # start another copy. Use SO_EXCLUSIVEADDRUSE there instead: a second bind fails with "port in use".
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self):
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
     def handle_error(self, request, client_address):
         # no traceback for connections the browser aborted (WinError 10053/10054)
