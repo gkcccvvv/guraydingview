@@ -131,6 +131,8 @@ export class DrawingEngine {
     this.series = null;
     this.bars = [];
     this.times = [];
+    this.future = [];
+    this.T = [];
     this.stepEnd = 86400;
     this.stepStart = 86400;
     this.drawings = [];
@@ -166,17 +168,26 @@ export class DrawingEngine {
     for (let i = 1; i < this.times.length; i++) d.push(this.times[i] - this.times[i - 1]);
     this.stepEnd = median(d.slice(-80)) || 86400;
     this.stepStart = median(d.slice(0, 80)) || this.stepEnd;
+    this.setFuture(this.future);
+  }
+
+  // the empty future slots on the time axis (see futureTimes in app.js): future times map onto them
+  setFuture(times) {
+    this.future = times || [];
+    const last = this.times.length ? this.times[this.times.length - 1] : -Infinity;
+    this.T = this.times.concat(this.future.filter((t) => t > last));
     this.request();
   }
 
   updateBar(bar) {
     const n = this.times.length;
     if (n && bar.time === this.times[n - 1]) this.bars[n - 1] = bar;
-    else if (!n || bar.time > this.times[n - 1]) { this.bars.push(bar); this.times.push(bar.time); }
+    else if (!n || bar.time > this.times[n - 1]) { this.bars.push(bar); this.times.push(bar.time); this.setFuture(this.future); }
   }
 
+  // time <-> logical index over the bars and the future slots; beyond them, extrapolated by the usual bar step
   t2l(t) {
-    const T = this.times, n = T.length;
+    const T = this.T, n = T.length;
     if (!n) return 0;
     if (t <= T[0]) return (t - T[0]) / this.stepStart;
     if (t >= T[n - 1]) return n - 1 + (t - T[n - 1]) / this.stepEnd;
@@ -186,7 +197,7 @@ export class DrawingEngine {
   }
 
   l2t(l) {
-    const T = this.times, n = T.length;
+    const T = this.T, n = T.length;
     if (!n) return 0;
     if (l <= 0) return Math.round(T[0] + l * this.stepStart);
     if (l >= n - 1) return Math.round(T[n - 1] + (l - (n - 1)) * this.stepEnd);

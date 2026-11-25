@@ -242,6 +242,47 @@ const chart = LC.createChart(chartEl, {
 });
 let series = null;
 
+// Empty future slots after the last bar: they put future dates on the time axis and let you scroll and draw into
+// the future. They sit on a hidden series of their own, so live updates of the price series keep working.
+const futureSeries = chart.addLineSeries({ visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+const DAY = 86400;
+const WEEK = 7 * DAY;
+const YEAR = 365 * DAY;
+const isWeekend = (t) => [0, 6].includes(new Date(t * 1000).getUTCDay());
+
+function futureTimes(bars) {
+  const n = bars.length;
+  if (n < 2) return [];
+  const steps = [];
+  for (let i = Math.max(1, n - 80); i < n; i++) steps.push(bars[i].time - bars[i - 1].time);
+  steps.sort((a, b) => a - b);
+  const step = steps[steps.length >> 1];
+  const last = bars[n - 1].time;
+  const out = [];
+  if (step >= 25 * DAY) { // monthly / quarterly data: calendar months, 20 years
+    const k = Math.max(1, Math.round(step / (30.44 * DAY)));
+    const d = new Date(last * 1000);
+    for (let i = 1; i <= Math.ceil(240 / k); i++) out.push(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + i * k, Math.min(d.getUTCDate(), 28)) / 1000);
+  } else if (step >= 5 * DAY) { // weekly: 10 years
+    for (let i = 1; i <= 520; i++) out.push(last + i * step);
+  } else if (step >= 0.9 * DAY) { // daily: 5 years, weekdays only unless the market trades at weekends (crypto)
+    const weekends = bars.slice(-60).some((b) => isWeekend(b.time));
+    for (let t = last + DAY; t <= last + 5 * YEAR; t += DAY) if (weekends || !isWeekend(t)) out.push(t);
+  } else { // intraday: only at the times of the week the market traded in the last 8 weeks (sessions, weekends)
+    const slot = (t) => ((t % WEEK) + WEEK) % WEEK;
+    const open = new Set(bars.filter((b) => b.time > last - 8 * WEEK).map((b) => slot(b.time)));
+    const horizon = last + (step >= 4 * 3600 ? 3 : step >= 3600 ? 2 : 1) * YEAR;
+    for (let t = last + step; t <= horizon && out.length < 20000; t += step) if (open.has(slot(t))) out.push(t);
+  }
+  return out;
+}
+
+function setFuture() {
+  const fut = futureTimes(state.bars);
+  futureSeries.setData(fut.map((t) => ({ time: t })));
+  engine.setFuture(fut);
+}
+
 function priceFormat() {
   return { type: 'custom', minMove: state.big ? 1 : Math.pow(10, -state.dec), formatter: (p) => fmtPrice(p) };
 }
@@ -338,6 +379,7 @@ function rebuildSeries() {
   engine.setSeries(null);
   if (series) { try { series.detachPrimitive(shade); } catch (_) { /* ignore */ } chart.removeSeries(series); series = null; }
   extLine = null;
+  futureSeries.setData([]);
   if (!state.bars.length) return;
   const type = effType();
   series = createSeries(type);
@@ -346,6 +388,7 @@ function rebuildSeries() {
   shade.set(sessionFlags());
   engine.setSeries(series);
   engine.setData(state.bars);
+  setFuture();
   updateExtLine();
 }
 
@@ -646,7 +689,7 @@ async function liveUpdate() {
       series.update(type === 'line' ? { time: t, value: c } : bar);
       engine.updateBar(bar);
     }
-    if (state.bars.length !== nBefore) shade.set(sessionFlags());
+    if (state.bars.length !== nBefore) { shade.set(sessionFlags()); setFuture(); }
     if (!state.crosshair) renderLegend();
     document.title = `${sym} ${fmtPrice(state.bars.at(-1).close)} — Guraydingview`;
   } catch (_) { /* temporary error — retried next round */ }
