@@ -1,0 +1,9 @@
+# Kişisel veriler: çizimler, watchlist, EVDS anahtarı (config.json), kayıtlar, logo önbelleği, CSV'ler
+data/
+
+# Yerel araç ayarları ve geçici dosyalar
+.claude/
+__pycache__/
+*.pyc
+*.log
+*.tmp
