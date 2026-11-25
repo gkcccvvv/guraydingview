@@ -1,8 +1,9 @@
-# Kişisel veriler: çizimler, watchlist, EVDS anahtarı (config.json), kayıtlar, logo önbelleği, CSV'ler
+# Personal data: drawings, watchlist, EVDS key (config.json), logs, logo cache, CSV files
 data/
 
-# Yerel araç ayarları ve geçici dosyalar
+# Local tool settings, shortcuts and temporary files
 .claude/
+*.lnk
 __pycache__/
 *.pyc
 *.log

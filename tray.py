@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Grafik Masası — konsol penceresi olmadan, saatin yanındaki simgeyle (sistem tepsisi) çalıştırma.
+Guraydingview — run without a console window, with an icon in the notification area (system tray).
 
-    pythonw tray.py                    -> sunucuyu başlatır, tepside simge gösterir, tarayıcıyı açar
-    pythonw tray.py --no-open --quiet  -> tarayıcıyı açmadan, bildirim göstermeden (Windows açılışı için)
+    pythonw tray.py                    -> starts the server, shows the tray icon, opens the browser
+    pythonw tray.py --no-open --quiet  -> no browser, no notification (used when starting with Windows)
 
-Simgeye tıkla: uygulamayı aç. Sağ tık: aç, yeniden başlat, verileri yenile, kayıt dosyası, klasör,
-Windows açılınca başlat, çıkış. Sadece Python standart kütüphanesi ve Windows API'si (ctypes) kullanır.
+Click the icon: open the app. Right-click: open, restart, refresh data, log file, folder, desktop / Start menu
+shortcut, start with Windows, exit. Python standard library + the Windows API (ctypes) only.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -21,17 +21,24 @@ import time
 import webbrowser
 import zlib
 
+APP = "Guraydingview"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 os.chdir(ROOT)
 DATA_DIR = os.path.join(ROOT, "data")
 LOG_FILE = os.path.join(DATA_DIR, "server.log")
 ICON_FILE = os.path.join(ROOT, "static", "favicon.ico")
-STARTUP_VBS = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs",
-                           "Startup", "Grafik Masasi.vbs")
+ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
+APPDATA = os.environ.get("APPDATA", "")
+STARTUP_DIR = os.path.join(APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+STARTUP_VBS = os.path.join(STARTUP_DIR, APP + ".vbs")
+LEGACY_VBS = os.path.join(STARTUP_DIR, "Grafik Masasi.vbs")  # name used by earlier versions
+START_MENU_LNK = os.path.join(APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", APP + ".lnk")
+FOLDER_LNK = os.path.join(ROOT, APP + ".lnk")
+CREATE_NO_WINDOW = 0x08000000
 
 
 def setup_log():
-    """pythonw'da konsol yok: çıktılar data/server.log dosyasına."""
+    """pythonw has no console: write output to data/server.log."""
     os.makedirs(DATA_DIR, exist_ok=True)
     try:
         if os.path.getsize(LOG_FILE) > 2_000_000:
@@ -40,18 +47,18 @@ def setup_log():
         pass
     f = open(LOG_FILE, "a", encoding="utf-8", buffering=1, errors="replace")
     sys.stdout = sys.stderr = f
-    print(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} Grafik Masası başlatılıyor (tepsi simgesi)")
+    print(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} {APP} starting (tray icon)")
 
 
 setup_log()
 sys.path.insert(0, ROOT)
-import server  # noqa: E402  (log yönlendirmesinden sonra)
+import server  # noqa: E402  (after redirecting the log)
 
 
 # ----------------------------------------------------------------------------
-# simge: kod ile çizilir (koyu kare, mavi çizgi, yeşil/kırmızı mumlar) ve .ico olarak kaydedilir
+# icon: drawn in code (dark rounded square, blue line, green/red candles) and saved as .ico
 # ----------------------------------------------------------------------------
-def _render(S=192):
+def _render(S):
     BG, BLUE, UP, DOWN = (19, 23, 34), (41, 98, 255), (8, 153, 129), (242, 54, 69)
     line = [(8, 50), (22, 38), (33, 44), (56, 14)]
     candles = [(17, 30, 46, 22, 52, UP), (31, 24, 38, 17, 44, DOWN), (45, 13, 30, 7, 36, UP)]
@@ -70,20 +77,21 @@ def _render(S=192):
         return ((u - x1 - t * dx) ** 2 + (v - y1 - t * dy) ** 2) ** 0.5
 
     px = bytearray(S * S * 4)
+    k = 64 / S
     for y in range(S):
+        v = (y + 0.5) * k
         for x in range(S):
-            u, v = (x + 0.5) * 64 / S, (y + 0.5) * 64 / S
-            col = None
-            if in_rrect(u, v, 1, 1, 63, 63, 14):
-                col = BG
-                if min(seg_dist(u, v, line[i], line[i + 1]) for i in range(len(line) - 1)) <= 2.6:
-                    col = BLUE
-                for cx, top, bot, wt_, wb, c in candles:
-                    if (abs(u - cx) <= 4.5 and top <= v <= bot) or (abs(u - cx) <= 1.1 and wt_ <= v <= wb):
-                        col = c
-            if col:
-                i = (y * S + x) * 4
-                px[i:i + 4] = bytes((*col, 255))
+            u = (x + 0.5) * k
+            if not in_rrect(u, v, 1, 1, 63, 63, 14):
+                continue
+            col = BG
+            if min(seg_dist(u, v, line[i], line[i + 1]) for i in range(len(line) - 1)) <= 2.6:
+                col = BLUE
+            for cx, top, bot, wtop, wbot, c in candles:
+                if (abs(u - cx) <= 4.5 and top <= v <= bot) or (abs(u - cx) <= 1.1 and wtop <= v <= wbot):
+                    col = c
+            i = (y * S + x) * 4
+            px[i:i + 4] = bytes((*col, 255))
     return px
 
 
@@ -94,15 +102,17 @@ def _downsample(px, S, n):
         for x in range(n):
             r = g = b = a = 0
             for yy in range(y * f, y * f + f):
+                base = yy * S
                 for xx in range(x * f, x * f + f):
-                    i = (yy * S + xx) * 4
+                    i = (base + xx) * 4
                     al = px[i + 3]
-                    r += px[i] * al
-                    g += px[i + 1] * al
-                    b += px[i + 2] * al
-                    a += al
-            o = (y * n + x) * 4
+                    if al:
+                        r += px[i] * al
+                        g += px[i + 1] * al
+                        b += px[i + 2] * al
+                        a += al
             if a:
+                o = (y * n + x) * 4
                 out[o:o + 4] = bytes((r // a, g // a, b // a, a // (f * f)))
     return out
 
@@ -119,9 +129,9 @@ def _png(n, rgba):
 def ensure_icon():
     if os.path.exists(ICON_FILE):
         return
-    S = 192
+    S = 768  # divisible by every icon size, so downsampling is exact
     px = _render(S)
-    imgs = [(n, _png(n, _downsample(px, S, n))) for n in (16, 24, 32, 48, 64)]
+    imgs = [(n, _png(n, _downsample(px, S, n))) for n in ICON_SIZES]
     head = struct.pack("<HHH", 0, 1, len(imgs))
     off, dirs, data = 6 + 16 * len(imgs), b"", b""
     for n, png in imgs:
@@ -130,6 +140,58 @@ def ensure_icon():
     os.makedirs(os.path.dirname(ICON_FILE), exist_ok=True)
     with open(ICON_FILE, "wb") as f:
         f.write(head + dirs + data)
+
+
+# ----------------------------------------------------------------------------
+# shortcuts (.lnk with the app icon) and start with Windows
+# ----------------------------------------------------------------------------
+def pythonw_exe():
+    exe = sys.executable
+    if exe.lower().endswith("python.exe"):
+        cand = exe[:-10] + "pythonw.exe"
+        if os.path.exists(cand):
+            return cand
+    return exe
+
+
+def create_shortcut(lnk_path):
+    """Create a Windows shortcut that starts the tray app, with the Guraydingview icon."""
+    q = lambda p: p.replace("'", "''")  # noqa: E731  (PowerShell single-quote escaping)
+    tray_py = os.path.join(ROOT, "tray.py")
+    ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{q(lnk_path)}');"
+          f"$s.TargetPath='{q(pythonw_exe())}';$s.Arguments='\"{q(tray_py)}\"';"
+          f"$s.WorkingDirectory='{q(ROOT)}';$s.IconLocation='{q(ICON_FILE)},0';"
+          f"$s.Description='{APP} - charts with unlimited drawings';$s.Save()")
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                   creationflags=CREATE_NO_WINDOW, timeout=30, check=True)
+
+
+def desktop_dir():
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                              "[Environment]::GetFolderPath('Desktop')"],
+                             capture_output=True, text=True, creationflags=CREATE_NO_WINDOW, timeout=20)
+        if out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return os.path.join(os.path.expanduser("~"), "Desktop")
+
+
+def autostart_enabled():
+    return os.path.exists(STARTUP_VBS) or os.path.exists(LEGACY_VBS)
+
+
+def set_autostart(on):
+    if os.path.exists(LEGACY_VBS):
+        os.remove(LEGACY_VBS)
+    if on:
+        vbs = ('CreateObject("WScript.Shell").Run """{}"" ""{}"" --no-open --quiet", 0, False\r\n'
+               .format(pythonw_exe(), os.path.join(ROOT, "tray.py")))
+        with open(STARTUP_VBS, "w", encoding="mbcs") as f:
+            f.write(vbs)
+    elif os.path.exists(STARTUP_VBS):
+        os.remove(STARTUP_VBS)
 
 
 # ----------------------------------------------------------------------------
@@ -199,56 +261,33 @@ NIF_MESSAGE, NIF_ICON, NIF_TIP, NIF_INFO = 0x1, 0x2, 0x4, 0x10
 MF_SEPARATOR, MF_GRAYED, MF_CHECKED = 0x800, 0x1, 0x8
 TPM_RIGHTBUTTON, TPM_RETURNCMD, TPM_NONOTIFY, TPM_BOTTOMALIGN = 0x2, 0x100, 0x80, 0x20
 
-CMD_OPEN, CMD_RESTART, CMD_REFRESH, CMD_LOG, CMD_FOLDER, CMD_AUTOSTART, CMD_EXIT = range(1, 8)
-
-
-def pythonw_exe():
-    exe = sys.executable
-    if exe.lower().endswith("python.exe"):
-        cand = exe[:-10] + "pythonw.exe"
-        if os.path.exists(cand):
-            return cand
-    return exe
-
-
-def autostart_enabled():
-    return os.path.exists(STARTUP_VBS)
-
-
-def set_autostart(on):
-    if on:
-        tray_py = os.path.join(ROOT, "tray.py")
-        vbs = ('CreateObject("WScript.Shell").Run """{}"" ""{}"" --no-open --quiet", 0, False\r\n'
-               .format(pythonw_exe(), tray_py))
-        with open(STARTUP_VBS, "w", encoding="mbcs") as f:
-            f.write(vbs)
-    elif os.path.exists(STARTUP_VBS):
-        os.remove(STARTUP_VBS)
+(CMD_OPEN, CMD_RESTART, CMD_REFRESH, CMD_LOG, CMD_FOLDER, CMD_AUTOSTART, CMD_EXIT,
+ CMD_DESKTOP, CMD_STARTMENU) = range(1, 10)
+WINDOW_CLASS = "GuraydingviewTray"
 
 
 class Tray:
     def __init__(self):
         self.url = f"http://{server.HOST}:{server.PORT}/"
         self.srv = None
-        self.tip = "Grafik Masası"
-        self.taskbar_created = None  # pencere oluşturulurken de mesaj gelir: önce tanımla
-        self._wndproc = WNDPROC(self._proc)  # referans tut: çöp toplayıcı silmesin
+        self.tip = APP
+        self.taskbar_created = None  # messages arrive while the window is being created: define first
+        self._wndproc = WNDPROC(self._proc)  # keep a reference so it isn't garbage collected
         hinst = kernel32.GetModuleHandleW(None)
         wc = WNDCLASSW()
         wc.lpfnWndProc = self._wndproc
         wc.hInstance = hinst
-        wc.lpszClassName = "GrafikMasasiTray"
+        wc.lpszClassName = WINDOW_CLASS
         user32.RegisterClassW(ctypes.byref(wc))
-        self.hwnd = user32.CreateWindowExW(0, "GrafikMasasiTray", "Grafik Masası", 0, 0, 0, 0, 0,
-                                           None, None, hinst, None)
+        self.hwnd = user32.CreateWindowExW(0, WINDOW_CLASS, APP, 0, 0, 0, 0, 0, None, None, hinst, None)
         if not self.hwnd:
-            raise OSError(f"Tepsi penceresi oluşturulamadı (hata {ctypes.get_last_error()})")
+            raise OSError(f"Could not create the tray window (error {ctypes.get_last_error()})")
         self.taskbar_created = user32.RegisterWindowMessageW("TaskbarCreated")
-        sx, sy = user32.GetSystemMetrics(49), user32.GetSystemMetrics(50)  # küçük simge boyutu (DPI'ye göre)
+        sx, sy = user32.GetSystemMetrics(49), user32.GetSystemMetrics(50)  # small icon size (DPI aware)
         self.hicon = user32.LoadImageW(None, ICON_FILE, 1, sx, sy, 0x10)
-        self._icon(NIM_ADD, tip="Grafik Masası — başlatılıyor…")
+        self._icon(NIM_ADD, tip=f"{APP} — starting…")
 
-    # ---- tepsi simgesi
+    # ---- tray icon
     def _nid(self):
         nid = NOTIFYICONDATAW()
         nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
@@ -275,9 +314,9 @@ class Tray:
         nid.dwInfoFlags = 0x1  # NIIF_INFO
         shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
 
-    # ---- sunucu
+    # ---- server
     def start_server(self):
-        for _ in range(30):  # yeniden başlatmada eski süreç portu bırakana kadar bekle
+        for _ in range(30):  # after a restart, wait until the old process releases the port
             try:
                 self.srv = server.QuietServer((server.HOST, server.PORT), server.Handler)
                 break
@@ -286,8 +325,8 @@ class Tray:
         else:
             return False
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
-        print(f"Sunucu çalışıyor: {self.url}")
-        self._icon(NIM_MODIFY, tip=f"Grafik Masası — çalışıyor ({server.HOST}:{server.PORT})")
+        print(f"Server running: {self.url}")
+        self._icon(NIM_MODIFY, tip=f"{APP} — running ({server.HOST}:{server.PORT})")
         return True
 
     def stop_server(self):
@@ -295,14 +334,14 @@ class Tray:
             self.srv.shutdown()
             self.srv.server_close()
             self.srv = None
-            print("Sunucu durduruldu")
+            print("Server stopped")
 
-    # ---- menü komutları
+    # ---- menu commands
     def open(self):
         webbrowser.open(self.url)
 
     def restart(self):
-        print("Yeniden başlatılıyor…")
+        print("Restarting…")
         self.stop_server()
         self._icon(NIM_DELETE)
         subprocess.Popen([pythonw_exe(), os.path.join(ROOT, "tray.py"), "--no-open", "--restarted"],
@@ -312,29 +351,31 @@ class Tray:
     def refresh(self):
         with server._cache_lock:
             server._cache.clear()
-        self.notify("Grafik Masası", "Önbellek temizlendi — veriler kaynaktan yeniden çekilecek.")
+        self.notify(APP, "Cache cleared — data will be fetched from the sources again.")
 
     def menu(self):
         m = user32.CreatePopupMenu()
         items = [
-            (0, f"Grafik Masası — {'çalışıyor' if self.srv else 'durdu'} ({server.HOST}:{server.PORT})", MF_GRAYED),
+            (0, f"{APP} — {'running' if self.srv else 'stopped'} ({server.HOST}:{server.PORT})", MF_GRAYED),
             (0, None, MF_SEPARATOR),
-            (CMD_OPEN, "Grafik Masası'nı aç", 0),
-            (CMD_RESTART, "Sunucuyu yeniden başlat", 0),
-            (CMD_REFRESH, "Verileri yenile (önbelleği temizle)", 0),
+            (CMD_OPEN, f"Open {APP}", 0),
+            (CMD_RESTART, "Restart server", 0),
+            (CMD_REFRESH, "Refresh data (clear cache)", 0),
             (0, None, MF_SEPARATOR),
-            (CMD_LOG, "Kayıt dosyasını aç (log)", 0),
-            (CMD_FOLDER, "Klasörü aç", 0),
-            (CMD_AUTOSTART, "Windows açılınca başlat", MF_CHECKED if autostart_enabled() else 0),
+            (CMD_LOG, "Open log file", 0),
+            (CMD_FOLDER, "Open folder", 0),
+            (CMD_DESKTOP, "Create desktop shortcut", 0),
+            (CMD_STARTMENU, "Add to Start menu", MF_CHECKED if os.path.exists(START_MENU_LNK) else 0),
+            (CMD_AUTOSTART, "Start with Windows", MF_CHECKED if autostart_enabled() else 0),
             (0, None, MF_SEPARATOR),
-            (CMD_EXIT, "Çıkış", 0),
+            (CMD_EXIT, "Exit", 0),
         ]
         for cid, text, flags in items:
             user32.AppendMenuW(m, flags, cid, text)
         user32.SetMenuDefaultItem(m, CMD_OPEN, 0)
         pt = wt.POINT()
         user32.GetCursorPos(ctypes.byref(pt))
-        user32.SetForegroundWindow(self.hwnd)  # menü dışına tıklanınca kapanabilsin
+        user32.SetForegroundWindow(self.hwnd)  # so the menu closes when clicking elsewhere
         cmd = user32.TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY | TPM_BOTTOMALIGN,
                                     pt.x, pt.y, 0, self.hwnd, None)
         user32.PostMessageW(self.hwnd, 0, 0, 0)
@@ -353,27 +394,36 @@ class Tray:
                 os.startfile(LOG_FILE)
             elif cmd == CMD_FOLDER:
                 os.startfile(ROOT)
+            elif cmd == CMD_DESKTOP:
+                create_shortcut(os.path.join(desktop_dir(), APP + ".lnk"))
+                self.notify(APP, "Desktop shortcut created.")
+            elif cmd == CMD_STARTMENU:
+                if os.path.exists(START_MENU_LNK):
+                    os.remove(START_MENU_LNK)
+                    self.notify(APP, "Removed from the Start menu.")
+                else:
+                    create_shortcut(START_MENU_LNK)
+                    self.notify(APP, "Added to the Start menu.")
             elif cmd == CMD_AUTOSTART:
                 on = not autostart_enabled()
                 set_autostart(on)
-                self.notify("Grafik Masası", "Windows açılınca otomatik başlayacak." if on
-                            else "Windows açılınca artık başlamayacak.")
+                self.notify(APP, "Will start with Windows." if on else "Will no longer start with Windows.")
             elif cmd == CMD_EXIT:
-                print("Çıkış")
+                print("Exit")
                 self.stop_server()
                 user32.DestroyWindow(self.hwnd)
         except Exception as e:
-            print(f"Menü komutu hatası: {e!r}")
+            print(f"Menu command failed: {e!r}")
 
     def _proc(self, hwnd, msg, wparam, lparam):
         try:
             return self._handle(hwnd, msg, wparam, lparam)
-        except Exception as e:  # geri çağrıda hata pencereyi bozmasın
-            print(f"Pencere mesajı hatası ({msg}): {e!r}")
+        except Exception as e:  # an error in the callback must not break the window
+            print(f"Window message error ({msg}): {e!r}")
             return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
     def _handle(self, hwnd, msg, wparam, lparam):
-        if msg == WM_COMMAND:  # menü komutları pencere mesajıyla da çalışır
+        if msg == WM_COMMAND:  # menu commands also work as window messages
             self.run((wparam or 0) & 0xFFFF)
             return 0
         if msg == CALLBACK:
@@ -383,7 +433,7 @@ class Tray:
             elif ev == WM_LBUTTONUP:
                 self.open()
             return 0
-        if msg == self.taskbar_created and msg:  # Explorer yeniden başladı: simgeyi geri koy
+        if msg == self.taskbar_created and msg:  # Explorer restarted: put the icon back
             self._icon(NIM_ADD)
             return 0
         if msg == WM_DESTROY:
@@ -402,27 +452,34 @@ class Tray:
 def main():
     args = sys.argv[1:]
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # menü yüksek DPI'de bulanık olmasın
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # crisp menu on high-DPI screens
     except Exception:
         pass
     ensure_icon()
+    if not os.path.exists(FOLDER_LNK):  # an icon launcher next to Start.bat
+        try:
+            create_shortcut(FOLDER_LNK)
+        except Exception as e:
+            print(f"Could not create the shortcut: {e!r}")
+    if os.path.exists(LEGACY_VBS):  # migrate "start with Windows" from the old name
+        set_autostart(True)
     os.makedirs(server.CSV_DIR, exist_ok=True)
-    if os.path.exists(server.DRAWINGS_FILE) and "--restarted" not in args:  # her açılışta çizim yedeği
+    if os.path.exists(server.DRAWINGS_FILE) and "--restarted" not in args:  # back up drawings on every start
         shutil.copyfile(server.DRAWINGS_FILE, os.path.join(DATA_DIR, "drawings.backup.json"))
     tray = Tray()
     if not tray.start_server():
         tray._icon(NIM_DELETE)
-        user32.MessageBoxW(None, f"Port {server.PORT} kullanımda — Grafik Masası zaten açık olabilir.\n"
-                                 "Eski siyah (konsol) pencere açıksa onu kapatıp tekrar dene.\n\n"
-                                 "Şimdilik açık olan tarayıcıda gösteriliyor.", "Grafik Masası", 0x40)
+        user32.MessageBoxW(None, f"Port {server.PORT} is in use — {APP} may already be running.\n"
+                                 "If an old console window is open, close it and try again.\n\n"
+                                 "Opening the running instance in the browser.", APP, 0x40)
         webbrowser.open(tray.url)
         return
     if "--no-open" not in args:
         tray.open()
     if "--quiet" not in args and "--restarted" not in args:
-        tray.notify("Grafik Masası çalışıyor", "Simgeye tıkla: aç · sağ tık: menü (yeniden başlat, çıkış…)")
+        tray.notify(f"{APP} is running", "Click the icon to open · right-click for the menu (restart, exit…)")
     elif "--restarted" in args:
-        tray.notify("Grafik Masası", "Sunucu yeniden başlatıldı.")
+        tray.notify(APP, "Server restarted.")
     tray.loop()
     tray.stop_server()
 

@@ -1,4 +1,4 @@
-# Çift tıkla: Grafik Masası'nı konsol penceresi olmadan, saatin yanındaki simgeyle başlatır.
+# Double-click: starts Guraydingview without a console window, with an icon next to the clock.
 import os
 import runpy
 

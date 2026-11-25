@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Grafik Masası — yerel grafik sunucusu (sınırsız çizim).
+Guraydingview — local charting server (unlimited drawings).
 
     python server.py          -> http://127.0.0.1:8765
-    python server.py --open   -> sunucuyu başlatır ve tarayıcıyı açar
+    python server.py --open   -> starts the server and opens the browser
 
-Veri kaynakları : Yahoo Finance, Binance, FRED, multpl.com, data/csv/*.csv
-Kayıtlar        : data/watchlist.json, data/drawings.json
-Sadece Python standart kütüphanesi kullanılır (pip install gerekmez).
+Data sources : Yahoo Finance, Binance, FRED, ISM (ism-feed), TCMB EVDS, multpl.com, data/csv/*.csv
+Saved data   : data/watchlist.json, data/drawings.json, data/config.json
+Python standard library only (no pip install needed).
 """
 import bisect
 import csv
@@ -37,74 +37,74 @@ CSV_DIR = os.path.join(DATA_DIR, "csv")
 WATCHLIST_FILE = os.path.join(DATA_DIR, "watchlist.json")
 DRAWINGS_FILE = os.path.join(DATA_DIR, "drawings.json")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
-EVDS_BASE = "https://evds3.tcmb.gov.tr/igmevdsms-dis/"  # TCMB EVDS resmi web servisi (anahtar 'key' başlığında)
+EVDS_BASE = "https://evds3.tcmb.gov.tr/igmevdsms-dis/"  # TCMB EVDS official web service (key sent in the 'key' header)
 HOST = "127.0.0.1"
-PORT = int(os.environ.get("GRAFIK_PORT", "8765"))
+PORT = int(os.environ.get("GV_PORT") or os.environ.get("GRAFIK_PORT") or "8765")
 
 DAY = 86400
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 YAHOO_UA = "Mozilla/5.0"
-PLAIN_UA = "grafik-masasi/1.0"  # FRED tarayıcı taklidi yapan istemcileri engelliyor
+PLAIN_UA = "guraydingview/1.0"  # FRED blocks clients that pretend to be a browser
 
 
 class SymbolError(Exception):
-    """Sembol bulunamadı / veri yok — mesaj kullanıcıya gösterilir."""
+    """Symbol not found / no data — the message is shown to the user."""
 
 
 # ----------------------------------------------------------------------------
-# Sembol tablosu: kısa ad -> (kaynak, kaynaktaki kod, açıklama, çarpan)
-# Tabloda olmayanlar: "FRED:UNRATE", "BINANCE:ETHUSDT", "BIST:THYAO",
-# "MULTPL:shiller-pe", "CSV:dosya", ya da düz Yahoo kodu (AAPL, THYAO.IS, EURUSD=X).
-# Oran için iki sembolü "/" ile yaz: GOLD/SILVER, XU030/USDTRY
+# Symbol table: short name -> (source, code at the source, description, multiplier)
+# Anything else: "FRED:UNRATE", "BINANCE:ETHUSDT", "BIST:THYAO", "MULTPL:shiller-pe",
+# "CSV:file", or a plain Yahoo ticker (AAPL, THYAO.IS, EURUSD=X).
+# For a ratio, join two symbols with "/": GOLD/SILVER, XU030/USDTRY
 # ----------------------------------------------------------------------------
 ALIASES = {
-    "GOLD": ("yahoo", "GC=F", "Altın · ons/USD", 1),
-    "SILVER": ("yahoo", "SI=F", "Gümüş · ons/USD", 1),
-    "PLATINUM": ("yahoo", "PL=F", "Platin", 1),
-    "COPPER": ("yahoo", "HG=F", "Bakır", 1),
-    "USOIL": ("yahoo", "CL=F", "Ham petrol (WTI)", 1),
-    "UKOIL": ("yahoo", "BZ=F", "Brent petrol", 1),
-    "BTCUSD": ("binance", "BTCUSDT", "Bitcoin / Dolar", 1),
-    "ETHUSD": ("binance", "ETHUSDT", "Ethereum / Dolar", 1),
-    "SOLUSD": ("binance", "SOLUSDT", "Solana / Dolar", 1),
-    "USDTRY": ("yahoo", "TRY=X", "Dolar / Türk Lirası", 1),
-    "EURTRY": ("yahoo", "EURTRY=X", "Euro / Türk Lirası", 1),
-    "EURUSD": ("yahoo", "EURUSD=X", "Euro / Dolar", 1),
-    "DXY": ("yahoo", "DX-Y.NYB", "Dolar Endeksi", 1),
+    "GOLD": ("yahoo", "GC=F", "Gold · USD/oz", 1),
+    "SILVER": ("yahoo", "SI=F", "Silver · USD/oz", 1),
+    "PLATINUM": ("yahoo", "PL=F", "Platinum", 1),
+    "COPPER": ("yahoo", "HG=F", "Copper", 1),
+    "USOIL": ("yahoo", "CL=F", "Crude oil (WTI)", 1),
+    "UKOIL": ("yahoo", "BZ=F", "Brent crude", 1),
+    "BTCUSD": ("binance", "BTCUSDT", "Bitcoin / US Dollar", 1),
+    "ETHUSD": ("binance", "ETHUSDT", "Ethereum / US Dollar", 1),
+    "SOLUSD": ("binance", "SOLUSDT", "Solana / US Dollar", 1),
+    "USDTRY": ("yahoo", "TRY=X", "US Dollar / Turkish Lira", 1),
+    "EURTRY": ("yahoo", "EURTRY=X", "Euro / Turkish Lira", 1),
+    "EURUSD": ("yahoo", "EURUSD=X", "Euro / US Dollar", 1),
+    "DXY": ("yahoo", "DX-Y.NYB", "US Dollar Index", 1),
     "SPX": ("yahoo", "^GSPC", "S&P 500", 1),
     "NDX": ("yahoo", "^NDX", "Nasdaq 100", 1),
     "DJI": ("yahoo", "^DJI", "Dow Jones", 1),
-    "VIX": ("yahoo", "^VIX", "Volatilite Endeksi", 1),
-    "US10Y": ("yahoo", "^TNX", "ABD 10 yıllık faiz", 1),
+    "VIX": ("yahoo", "^VIX", "Volatility Index", 1),
+    "US10Y": ("yahoo", "^TNX", "US 10-year yield", 1),
     "XU030": ("yahoo", "XU030.IS", "BIST 30", 1),
     "XU100": ("yahoo", "XU100.IS", "BIST 100", 1),
-    "WALCL": ("fred", "WALCL", "Fed bilançosu (toplam varlıklar)", 1e6),
-    "USM2": ("fred", "M2SL", "ABD M2 para arzı", 1e9),
-    "TCU": ("fred", "TCU", "ABD kapasite kullanım oranı", 1),
-    "M2V": ("fred", "M2V", "M2 paranın dolaşım hızı", 1),
-    "UNRATE": ("fred", "UNRATE", "ABD işsizlik oranı", 1),
+    "WALCL": ("fred", "WALCL", "Fed balance sheet (total assets)", 1e6),
+    "USM2": ("fred", "M2SL", "US M2 money supply", 1e9),
+    "TCU": ("fred", "TCU", "US capacity utilization", 1),
+    "M2V": ("fred", "M2V", "M2 money velocity", 1),
+    "UNRATE": ("fred", "UNRATE", "US unemployment rate", 1),
     "SHILLER": ("multpl", "shiller-pe", "Shiller CAPE (S&P 500)", 1),
-    # ISM İmalat (2013'ten beri, her ay ISM bülteninden güncellenen GitHub ism-feed). data/csv'de aynı adla
-    # bir dosya varsa (ör. daha uzun geçmiş) o kullanılır.
-    "USBCOI": ("ism", "PMI", "ABD ISM İmalat PMI", 1),
-    "USMNO": ("ism", "New Orders", "ABD ISM İmalat Yeni Siparişler", 1),
-    "USISMMI": ("ism", "Inventories", "ABD ISM İmalat Stoklar", 1),
-    "USISMEMP": ("ism", "Employment", "ABD ISM İmalat İstihdam", 1),
+    # ISM Manufacturing (since 2013, from GitHub ism-feed, updated monthly from the ISM release).
+    # A file with the same name in data/csv (e.g. a longer history) takes priority.
+    "USBCOI": ("ism", "PMI", "US ISM Manufacturing PMI", 1),
+    "USMNO": ("ism", "New Orders", "US ISM Manufacturing New Orders", 1),
+    "USISMMI": ("ism", "Inventories", "US ISM Manufacturing Inventories", 1),
+    "USISMEMP": ("ism", "Employment", "US ISM Manufacturing Employment", 1),
 }
 ISM_FEED_URL = "https://raw.githubusercontent.com/sofiaverma06/ism-feed/main/ism_history.csv"
 
-# TCMB EVDS'ten gelen kısa adlar. Kodlar Ayarlar ekranından değiştirilebilir (data/config.json).
+# Short names served from TCMB EVDS. Codes can be changed in Settings (saved in data/config.json).
 DEFAULT_CONFIG = {
     "evds_key": "",
     "evds_series": {
-        # haftalık "Para Arzı" tablosu (bie_hpbitablo1), bin TL -> ×1000; TradingView TRM1/TRM2 ile aynı
-        "TRM1": {"code": "TP.HPBITABLO1.2", "mult": 1000, "name": "Türkiye M1 para arzı"},
-        "TRM2": {"code": "TP.HPBITABLO1.11", "mult": 1000, "name": "Türkiye M2 para arzı"},
+        # weekly "Money Supply" table (bie_hpbitablo1), thousand TL -> ×1000; matches TradingView TRM1/TRM2
+        "TRM1": {"code": "TP.HPBITABLO1.2", "mult": 1000, "name": "Turkey M1 money supply"},
+        "TRM2": {"code": "TP.HPBITABLO1.11", "mult": 1000, "name": "Turkey M2 money supply"},
     },
 }
 
 SOURCE_LABEL = {"yahoo": "Yahoo", "binance": "Binance", "fred": "FRED",
-                "multpl": "multpl", "csv": "CSV", "ratio": "Oran", "evds": "TCMB EVDS", "ism": "ISM"}
+                "multpl": "multpl", "csv": "CSV", "ratio": "Ratio", "evds": "TCMB EVDS", "ism": "ISM"}
 
 DEFAULT_WATCHLIST = {"groups": [
     {"name": "", "symbols": ["WALCL", "USM2"]},
@@ -118,7 +118,7 @@ DEFAULT_WATCHLIST = {"groups": [
 
 
 # ----------------------------------------------------------------------------
-# yardımcılar
+# helpers
 # ----------------------------------------------------------------------------
 def http_get(url, ua=PLAIN_UA, timeout=25):
     last = None
@@ -131,7 +131,7 @@ def http_get(url, ua=PLAIN_UA, timeout=25):
             if e.code in (400, 404):
                 raise
             last = e
-        except Exception as e:  # zaman aşımı vb. -> bir kez daha dene
+        except Exception as e:  # timeout etc. -> try once more
             last = e
         time.sleep(0.4)
     raise last
@@ -151,7 +151,7 @@ def cached(key, ttl, fn):
         return hit[1]
     try:
         val = fn()
-    except SymbolError as e:  # olmayan sembolü sürekli sorgulamayalım
+    except SymbolError as e:  # don't keep querying a symbol that doesn't exist
         with _cache_lock:
             _cache[key] = (now + 120, e)
         raise
@@ -164,13 +164,13 @@ def ts_of(y, m, d):
     return int((datetime(y, m, d, tzinfo=timezone.utc) - EPOCH).total_seconds())
 
 
-def dt_of(t):  # Windows'ta negatif timestamp için fromtimestamp çalışmaz
+def dt_of(t):  # fromtimestamp fails for negative timestamps on Windows
     return EPOCH + timedelta(seconds=t)
 
 
 def week_floor(t):
     d = t // DAY
-    return ((d + 3) // 7 * 7 - 3) * DAY  # pazartesi başlangıçlı
+    return ((d + 3) // 7 * 7 - 3) * DAY  # weeks start on Monday
 
 
 def month_floor(t):
@@ -179,7 +179,7 @@ def month_floor(t):
 
 
 def dedupe(bars):
-    """Zamana göre sırala, aynı zamandaki barları birleştir."""
+    """Sort by time and merge bars with the same timestamp."""
     bars.sort(key=lambda b: b[0])
     out = []
     for b in bars:
@@ -224,19 +224,19 @@ def parse_date_any(s):
     if m:
         return ts_of(int(m[1]), int(m[2]), int(m[3]))
     m = re.match(r"^(\d{1,2})[-./](\d{1,2})[-./](\d{4})", s)
-    if m:  # gg.aa.yyyy
+    if m:  # dd.mm.yyyy
         return ts_of(int(m[3]), int(m[2]), int(m[1]))
     m = re.match(r"^(\d{4})[-/]Q([1-4])$", s, re.I)
     if m:
         return ts_of(int(m[1]), (int(m[2]) - 1) * 3 + 1, 1)
     m = re.match(r"^(\d{4})[-./](\d{1,2})$", s)
-    if m:  # yyyy-aa (EVDS aylık)
+    if m:  # yyyy-mm (EVDS monthly)
         return ts_of(int(m[1]), int(m[2]), 1)
     m = re.match(r"^(\d{4})-S([12])$", s, re.I)
-    if m:  # yyyy-S1 (EVDS altı aylık)
+    if m:  # yyyy-S1 (EVDS semiannual)
         return ts_of(int(m[1]), 1 if m[2] == "1" else 7, 1)
     m = re.match(r"^(\d{4})$", s)
-    if m:  # yıllık
+    if m:  # yearly
         return ts_of(int(m[1]), 1, 1)
     m = re.match(r"^([A-Za-z]{3})[a-z]*\.? (\d{1,2}), (\d{4})$", s)
     if m and m[1].lower() in MONTHS_EN:
@@ -256,10 +256,10 @@ def parse_num(s):
 
 
 # ----------------------------------------------------------------------------
-# veri kaynakları
+# data sources
 # ----------------------------------------------------------------------------
 def _session_info(meta):
-    """Normal seansın borsa yerel saatindeki başlangıç/bitişi ve uzatılmış seans olup olmadığı."""
+    """Regular session start/end in exchange local time, and whether there is an extended session."""
     ctp = meta.get("currentTradingPeriod") or {}
     reg, pre, post = ctp.get("regular") or {}, ctp.get("pre") or {}, ctp.get("post") or {}
     off = int(meta.get("gmtoffset") or 0)
@@ -270,7 +270,7 @@ def _session_info(meta):
 
 
 def fetch_yahoo(ticker, base, short, ext=False):
-    ext = ext and base != "1d"  # piyasa öncesi/sonrası mumlar sadece gün içi periyotlarda
+    ext = ext and base != "1d"  # pre/after-hours bars only on intraday intervals
     if base == "1d":
         q = "range=3mo&interval=1d" if short else \
             f"period1=-2208988800&period2={int(time.time()) + DAY}&interval=1d"
@@ -284,11 +284,11 @@ def fetch_yahoo(ticker, base, short, ext=False):
         raw = http_get(url, YAHOO_UA)
     except urllib.error.HTTPError as e:
         if e.code in (400, 404):
-            raise SymbolError(f"Yahoo'da bulunamadı: {ticker}")
+            raise SymbolError(f"Not found on Yahoo: {ticker}")
         raise
     res = ((json.loads(raw).get("chart") or {}).get("result") or [None])[0]
     if not res or not res.get("timestamp"):
-        raise SymbolError(f"Yahoo'da veri yok: {ticker}")
+        raise SymbolError(f"No data on Yahoo: {ticker}")
     meta = res.get("meta") or {}
     off = int(meta.get("gmtoffset") or 0)
     q = res["indicators"]["quote"][0]
@@ -303,13 +303,13 @@ def fetch_yahoo(ticker, base, short, ext=False):
         h = H[i] if H[i] else max(o, c)
         l = L[i] if L[i] else min(o, c)
         if base == "1d":
-            t = (t + off) // DAY * DAY  # borsanın yerel tarihi
+            t = (t + off) // DAY * DAY  # exchange local date
         elif not ext:
             t = t // step * step
         bars.append([int(t), o, max(h, o, c), min(l, o, c), c])
     bars = dedupe(bars)
     if ext and len(bars) > 1 and bars[-1][0] - bars[-2][0] < step:
-        # Yahoo canlı son mumu o anki saatle veriyor: bir önceki muma kat
+        # Yahoo stamps the live bar with the current time: merge it into the previous bar
         last = bars.pop()
         bars[-1][2] = max(bars[-1][2], last[2])
         bars[-1][3] = min(bars[-1][3], last[3])
@@ -322,7 +322,7 @@ def fetch_yahoo(ticker, base, short, ext=False):
 
 
 def yahoo_ext_quote(ticker):
-    """ABD hisse/ETF'lerinde piyasa öncesi ya da sonrası son fiyat (normal seans açıkken None)."""
+    """Latest pre-market or after-hours price for US stocks/ETFs (None while the regular session is open)."""
     def fn():
         url = ("https://query1.finance.yahoo.com/v8/finance/chart/" + urllib.parse.quote(ticker, safe="")
                + "?interval=5m&range=2d&includePrePost=true")
@@ -336,7 +336,7 @@ def yahoo_ext_quote(ticker):
         reg = (meta.get("currentTradingPeriod") or {}).get("regular") or {}
         now = time.time()
         if reg.get("start", 0) <= now < reg.get("end", 0):
-            return None  # normal seans açık
+            return None  # regular session is open
         closes = res["indicators"]["quote"][0].get("close") or []
         pts = [(t, c) for t, c in zip(res.get("timestamp") or [], closes) if c]
         if not pts:
@@ -344,7 +344,7 @@ def yahoo_ext_quote(ticker):
         t, price = pts[-1]
         local = (t + sess["off"]) % DAY
         if sess["regStart"] <= local < sess["regEnd"]:
-            return None  # son işlem normal seansta: uzatılmış seansta fiyat oluşmamış
+            return None  # last trade was in the regular session: no extended-hours price yet
         base = meta.get("regularMarketPrice")
         if not base:
             return None
@@ -365,7 +365,7 @@ def fetch_binance(pair, base, short):
             return json.loads(http_get(api + "?" + urllib.parse.urlencode(params)))
         except urllib.error.HTTPError as e:
             if e.code == 400:
-                raise SymbolError(f"Binance'te bulunamadı: {pair}")
+                raise SymbolError(f"Not found on Binance: {pair}")
             raise
 
     rows = []
@@ -391,7 +391,7 @@ def fetch_binance(pair, base, short):
                 break
             end = chunk[0][0] - 1
     if not rows:
-        raise SymbolError(f"Binance'te veri yok: {pair}")
+        raise SymbolError(f"No data on Binance: {pair}")
     bars = [[r[0] // 1000, float(r[1]), float(r[2]), float(r[3]), float(r[4])] for r in rows]
     return dedupe(bars), {"name": pair, "exchange": "Binance", "currency": "USDT"}
 
@@ -402,11 +402,11 @@ def fetch_fred(sid):
         txt = http_get(url).decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         if e.code in (400, 404):
-            raise SymbolError(f"FRED'de bulunamadı: {sid}")
+            raise SymbolError(f"Not found on FRED: {sid}")
         raise
     lines = txt.strip().splitlines()
     if not lines or "," not in lines[0] or lines[0].lstrip().startswith("<"):
-        raise SymbolError(f"FRED'de bulunamadı: {sid}")
+        raise SymbolError(f"Not found on FRED: {sid}")
     bars = []
     for row in csv.reader(lines[1:]):
         if len(row) < 2 or row[1].strip() in ("", "."):
@@ -417,7 +417,7 @@ def fetch_fred(sid):
             continue
         bars.append([t, v, v, v, v])
     if not bars:
-        raise SymbolError(f"FRED'de veri yok: {sid}")
+        raise SymbolError(f"No data on FRED: {sid}")
     return dedupe(bars), {"name": sid, "exchange": "FRED", "currency": ""}
 
 
@@ -430,9 +430,9 @@ def fetch_multpl(slug):
     try:
         page = http_get(url, YAHOO_UA).decode("utf-8", "replace")
     except urllib.error.HTTPError:
-        raise SymbolError(f"multpl.com'da bulunamadı: {slug}")
+        raise SymbolError(f"Not found on multpl.com: {slug}")
     except Exception as e:
-        raise SymbolError(f"multpl.com'a ulaşılamadı ({e.__class__.__name__})")
+        raise SymbolError(f"Could not reach multpl.com ({e.__class__.__name__})")
     bars = []
     for row in re.findall(r"<tr[^>]*>(.*?)</tr>", page, re.S | re.I):
         cells = [_cell(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S | re.I)]
@@ -447,7 +447,7 @@ def fetch_multpl(slug):
             v = float(m[0])
             bars.append([t, v, v, v, v])
     if not bars:
-        raise SymbolError(f"multpl.com'dan veri okunamadı: {slug}")
+        raise SymbolError(f"Could not read data from multpl.com: {slug}")
     return dedupe(bars), {"name": slug, "exchange": "multpl.com", "currency": ""}
 
 
@@ -476,14 +476,14 @@ def fetch_csv(path):
             t = parse_date_any(row[0])
             vals = [parse_num(x) for x in row[1:5]]
         except ValueError:
-            continue  # başlık satırı vb.
+            continue  # header row etc.
         if len(vals) >= 4:
             o, h, l, c = vals[:4]
         else:
             o = h = l = c = vals[-1]
         bars.append([t, o, max(o, h, l, c), min(o, h, l, c), c])
     if not bars:
-        raise SymbolError(f"CSV okunamadı: {os.path.basename(path)} (beklenen: tarih,değer)")
+        raise SymbolError(f"Could not read CSV: {os.path.basename(path)} (expected: date,value)")
     return dedupe(bars), {"name": os.path.splitext(os.path.basename(path))[0], "exchange": "CSV", "currency": ""}
 
 
@@ -493,7 +493,7 @@ FRED_MD_ISM = {"PMI": "NAPM", "New Orders": "NAPMNOI", "Inventories": "NAPMII", 
 
 
 def _find_fredmd_zip():
-    """Kullanıcının tarayıcıyla indirdiği FRED-MD arşivi: proje klasörü, data/ ya da İndirilenler."""
+    """FRED-MD archive downloaded by the user: project folder, data/ or Downloads."""
     for d in (ROOT, DATA_DIR, os.path.join(os.path.expanduser("~"), "Downloads")):
         try:
             for f in sorted(os.listdir(d)):
@@ -505,7 +505,7 @@ def _find_fredmd_zip():
 
 
 def build_ism_base(zip_path):
-    """FRED-MD 2016 sürümünden (ISM serileri kaldırılmadan önceki son sürüm) 1959–2016 ISM geçmişini çıkar."""
+    """Extract the 1959–2016 ISM history from the 2016 FRED-MD vintage (the last one before ISM series were removed)."""
     import zipfile
     with zipfile.ZipFile(zip_path) as z:
         members = sorted((n for n in z.namelist() if n.lower().endswith(".csv")), reverse=True)
@@ -513,13 +513,13 @@ def build_ism_base(zip_path):
             text = z.read(name).decode("utf-8-sig", "replace")
             rows = list(csv.reader(io.StringIO(text)))
             if not rows or "NAPM" not in rows[0]:
-                continue  # 2016-06 ve sonrası: ISM serileri kaldırılmış
+                continue  # 2016-06 and later: ISM series removed
             idx = {c: rows[0].index(col) for c, col in FRED_MD_ISM.items() if col in rows[0]}
             out = ["date," + ",".join(ISM_COLS)]
             for r in rows[1:]:
                 m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", r[0].strip()) if r else None
                 if not m:
-                    continue  # "Transform:" satırı vb.
+                    continue  # "Transform:" row etc.
                 vals = [r[idx[c]].strip() if c in idx and idx[c] < len(r) else "" for c in ISM_COLS]
                 if any(vals):
                     out.append(f"{m[3]}-{int(m[1]):02d}-01," + ",".join(vals))
@@ -546,21 +546,21 @@ def _ism_rows(text, column):
             v = float(r[ci])
         except ValueError:
             continue
-        # TradingView değeri açıklandığı güne koyuyor (Ekim verisi → 2 Kasım): bir sonraki ayın 1'i
+        # TradingView plots a value on its release date (October data → Nov 2): use the 1st of the next month
         y, m = (dt.year + 1, 1) if dt.month == 12 else (dt.year, dt.month + 1)
         bars.append([ts_of(y, m, 1), v, v, v, v])
     return bars
 
 
 def fetch_ism(column):
-    """ISM İmalat: 2013'ten beri GitHub ism-feed (aylık güncellenir) + varsa 1959–2016 FRED-MD geçmişi."""
+    """ISM Manufacturing: GitHub ism-feed since 2013 (updated monthly) + the 1959–2016 FRED-MD history if present."""
     try:
         text = http_get(ISM_FEED_URL).decode("utf-8-sig", "replace")
     except Exception as e:
-        raise SymbolError(f"ISM verisine ulaşılamadı ({e.__class__.__name__})")
+        raise SymbolError(f"Could not reach ISM data ({e.__class__.__name__})")
     bars = _ism_rows(text, column)
     if not bars:
-        raise SymbolError(f"ISM verisinde '{column}' sütunu yok")
+        raise SymbolError(f"ISM data has no '{column}' column")
     if not os.path.exists(ISM_BASE_FILE):
         z = _find_fredmd_zip()
         if z:
@@ -571,23 +571,23 @@ def fetch_ism(column):
     if os.path.exists(ISM_BASE_FILE):
         feed_start = min(b[0] for b in bars)
         with open(ISM_BASE_FILE, encoding="utf-8") as f:
-            old = [b for b in _ism_rows(f.read(), column) if b[0] < feed_start]  # çakışan aylarda güncel kaynak
+            old = [b for b in _ism_rows(f.read(), column) if b[0] < feed_start]  # overlapping months: the current source wins
         bars = old + bars
     return dedupe(bars), {"name": column, "exchange": "Institute for Supply Management", "currency": ""}
 
 
 # ----------------------------------------------------------------------------
-# TCMB EVDS (resmi web servisi, kullanıcının ücretsiz API anahtarıyla)
+# TCMB EVDS (official web service, with the user's free API key)
 # ----------------------------------------------------------------------------
 class EvdsAuthError(SymbolError):
     pass
 
 
-EVDS_ARCHIVED = {"", "TP.PR.ARZ01", "TP.PR.ARZ13", "TP.PR.ARZ22"}  # 2025'te arşive alınan para arzı serileri
-EVDS_ROW_CAP = 1000  # EVDS tek istekte en fazla bu kadar satır döndürüyor
+EVDS_ARCHIVED = {"", "TP.PR.ARZ01", "TP.PR.ARZ13", "TP.PR.ARZ22"}  # money supply series archived by TCMB in 2025
+EVDS_ROW_CAP = 1000  # EVDS returns at most this many rows per request
 
-EVDS_NO_KEY = ("EVDS API anahtarı girilmemiş. Sağ üstteki ⚙ Ayarlar'dan TCMB EVDS anahtarını gir "
-               "(evds3.tcmb.gov.tr → Profil → API Anahtarı, ücretsiz).")
+EVDS_NO_KEY = ("No EVDS API key yet. Enter your TCMB EVDS key in ⚙ Settings (top right) "
+               "(evds3.tcmb.gov.tr → Profile → API Key, free).")
 
 
 def load_config():
@@ -599,7 +599,7 @@ def load_config():
         d = d if isinstance(d, dict) else {}
         code = str(d.get("code", base.get("code", "")) or "").strip().upper()
         if code in EVDS_ARCHIVED and alias.upper() in DEFAULT_CONFIG["evds_series"]:
-            code = base.get("code", code)  # TCMB'nin arşive aldığı eski koddan güncel seriye geç
+            code = base.get("code", code)  # switch from an archived TCMB code to the current series
         out["evds_series"][alias.upper()] = {
             "code": code,
             "mult": float(d.get("mult", base.get("mult", 1)) or 1),
@@ -640,9 +640,9 @@ def evds_get(path):
     except urllib.error.HTTPError as e:
         body = e.read()[:300].decode("utf-8", "replace")
         if e.code in (401, 403):
-            raise EvdsAuthError("EVDS anahtarı kabul edilmedi (yanlış ya da geçersiz). Ayarlar'dan kontrol et.")
+            raise EvdsAuthError("EVDS rejected the API key (wrong or invalid). Check it in Settings.")
         if e.code in (400, 404):
-            raise SymbolError(f"EVDS isteği reddedildi ({e.code}): {body.strip()[:160]}")
+            raise SymbolError(f"EVDS rejected the request ({e.code}): {body.strip()[:160]}")
         raise
     txt = raw.decode("utf-8", "replace").strip()
     if not txt:
@@ -650,11 +650,11 @@ def evds_get(path):
     try:
         return json.loads(txt)
     except ValueError:
-        raise SymbolError(f"EVDS beklenmeyen yanıt verdi: {txt[:120]}")
+        raise SymbolError(f"Unexpected response from EVDS: {txt[:120]}")
 
 
 def _evds_rows(code, start, end, depth=0):
-    """EVDS 1000 satırdan fazlasını kesiyor: sınıra takılırsa aralığı ikiye bölüp tekrar iste."""
+    """EVDS truncates at 1000 rows: when the cap is hit, split the range in two and ask again."""
     j = evds_get(f"series={urllib.parse.quote(code, safe='.')}&startDate={start:%d-%m-%Y}"
                  f"&endDate={end:%d-%m-%Y}&type=json")
     items = _items(j)
@@ -672,7 +672,7 @@ def fetch_evds(code):
         if not isinstance(it, dict):
             continue
         v = _pick(it, col)
-        if v is None:  # sütun adı farklıysa tarih dışındaki ilk sayısal alanı al
+        if v is None:  # if the column name differs, take the first field that is not a date
             v = next((x for k, x in it.items() if str(k).upper() not in ("TARIH", "UNIXTIME", "YEARWEEK")), None)
         try:
             x = float(str(v).replace(",", "."))
@@ -694,7 +694,7 @@ def fetch_evds(code):
         if t is not None:
             bars.append([t, x, x, x, x])
     if not bars:
-        raise SymbolError(f"EVDS'de veri yok ya da kod yanlış: {code}")
+        raise SymbolError(f"No data on EVDS or wrong code: {code}")
     return dedupe(bars), {"name": code, "exchange": "TCMB EVDS", "currency": "TRY"}
 
 
@@ -704,7 +704,7 @@ def evds_test():
     for alias, e in cfg["evds_series"].items():
         row = {"alias": alias, "code": e["code"], "mult": e["mult"]}
         if not e["code"]:
-            row["error"] = "Seri kodu seçilmedi"
+            row["error"] = "No series code chosen"
         else:
             try:
                 bars, _ = fetch_evds(e["code"])
@@ -722,7 +722,7 @@ def evds_test():
             except SymbolError as ex:
                 row["error"] = str(ex)
             except Exception as ex:
-                row["error"] = f"Bağlantı hatası: {ex.__class__.__name__}"
+                row["error"] = f"Connection error: {ex.__class__.__name__}"
         out.append(row)
     return {"results": out}
 
@@ -731,9 +731,9 @@ MONEY_RE = re.compile(r"para\s*arz|parasal\s*b|money\s*supply|monetary\s*aggrega
 
 
 def evds_find(seed):
-    """Para arzı serilerinin listesini EVDS'nin resmi meta veri servisinden bul."""
+    """Find the money supply series via the official EVDS metadata service."""
     groups = {}
-    # 1) bilinen bir seri kodunun veri grubundan
+    # 1) from the data group of a known series code
     for code in [c for c in [seed, "TP.HPBITABLO1.11"] if c]:
         try:
             for m in _items(evds_get(f"serieList/type=json&code={urllib.parse.quote(code, safe='.')}")):
@@ -744,7 +744,7 @@ def evds_find(seed):
             raise
         except Exception:
             pass
-    # 2) kategori ve veri grubu adlarında "para arzı" ara (arşiv kategorileri hariç)
+    # 2) search category and data group names for "money supply" (skipping archive categories)
     if True:
         for c in _items(evds_get("categories/type=json")):
             title = " ".join(str(_pick(c, n) or "") for n in ("TOPIC_TITLE_TR", "TOPIC_TITLE_ENG", "CATEGORY_NAME"))
@@ -752,7 +752,7 @@ def evds_find(seed):
             if cid is None or not re.search(r"para|monet|banka|bank", title, re.I) or re.search(r"arşiv|archive", title, re.I):
                 continue
             try:
-                cid = int(float(cid))  # EVDS kimliği "450101.0" gibi gönderiyor; ondalıklı hali 400 hatası verir
+                cid = int(float(cid))  # EVDS sends ids like "450101.0"; the decimal form gives HTTP 400
                 for g in _items(evds_get(f"datagroups/mode=2&code={cid}&type=json")):
                     name = " ".join(str(_pick(g, n) or "") for n in ("DATAGROUP_NAME", "DATAGROUP_NAME_ENG"))
                     gc = _pick(g, "DATAGROUP_CODE")
@@ -774,16 +774,16 @@ def evds_find(seed):
             series = []
         series = [s for s in series if s["code"]]
         archived = bool(series) and all("arşiv" in s["name"].lower() or "arsiv" in s["name"].lower() for s in series)
-        result.append({"code": gc, "name": gname + (" (arşiv)" if archived else ""), "archived": archived,
+        result.append({"code": gc, "name": gname + (" (archive)" if archived else ""), "archived": archived,
                        "series": series})
-    result.sort(key=lambda g: g["archived"])  # güncel gruplar önce
+    result.sort(key=lambda g: g["archived"])  # current groups first
     if not result:
-        raise SymbolError("EVDS'de para arzı veri grubu bulunamadı. Kodu EVDS sitesinden bakıp elle yazabilirsin.")
+        raise SymbolError("No money supply data group found on EVDS. You can look up the code on the EVDS site and type it in.")
     return {"groups": result}
 
 
 # ----------------------------------------------------------------------------
-# sembol çözümleme ve seri üretimi
+# symbol resolution and series building
 # ----------------------------------------------------------------------------
 def _spec(src, code, name=None, mult=1):
     return {"key": f"{src}:{code}", "src": src, "code": code, "name": name or code,
@@ -793,7 +793,7 @@ def _spec(src, code, name=None, mult=1):
 def resolve(sym):
     s = (sym or "").strip()
     if not s:
-        raise SymbolError("Sembol boş")
+        raise SymbolError("Empty symbol")
     if "/" in s:
         left, right = s.split("/", 1)
         a, b = resolve(left), resolve(right)
@@ -804,15 +804,15 @@ def resolve(sym):
     if u in ALIASES:
         src, code, name, mult = ALIASES[u]
         if src == "ism" and find_csv(u):
-            return _spec("csv", u, name)  # kullanıcının koyduğu (daha uzun) CSV öncelikli
+            return _spec("csv", u, name)  # a (longer) CSV provided by the user takes priority
         return _spec(src, code, name, mult)
     cfg = load_config()
     if u in cfg["evds_series"]:
         e = cfg["evds_series"][u]
         if find_csv(u) and (not e["code"] or not cfg["evds_key"]):
-            return _spec("csv", u, e["name"])  # anahtar yoksa elle konmuş CSV'yi kullan
+            return _spec("csv", u, e["name"])  # without a key, use a CSV placed by hand
         if not e["code"]:
-            raise SymbolError(f"{u} için EVDS seri kodu seçilmemiş. Sağ üstteki ⚙ Ayarlar'dan seç.")
+            raise SymbolError(f"No EVDS series code chosen for {u}. Pick one in ⚙ Settings (top right).")
         return _spec("evds", e["code"], e["name"], e["mult"])
     if ":" in s:
         prefix, rest = (x.strip() for x in s.split(":", 1))
@@ -831,16 +831,16 @@ def resolve(sym):
             return _spec("csv", rest)
         if prefix in ("EVDS", "TCMB"):
             return _spec("evds", rest.upper())
-        raise SymbolError(f"Bilinmeyen kaynak öneki: {prefix}")
+        raise SymbolError(f"Unknown source prefix: {prefix}")
     if find_csv(s):
         return _spec("csv", s)
-    if re.fullmatch(r"[A-Z0-9]{2,20}USDT", u):  # ETHUSDT gibi -> Binance
+    if re.fullmatch(r"[A-Z0-9]{2,20}USDT", u):  # e.g. ETHUSDT -> Binance
         return _spec("binance", u)
     return _spec("yahoo", u)
 
 
 def ratio_bars(a, b, base):
-    """a'nın takvimine göre, b'nin o andaki (veya son) barına böl."""
+    """Divide a by b on a's calendar, using b's bar at that time (or the latest before it)."""
     bt = [x[0] for x in b]
     maxgap = 45 * DAY if base == "1d" else 2 * DAY
     out = []
@@ -867,13 +867,13 @@ def load(spec, base, short, ext=False):
         B, _ = load(spec["b"], base, short)
         bars = ratio_bars(A, B, base)
         if not bars:
-            raise SymbolError("Oran hesaplanamadı: iki sembolün ortak tarihi yok")
-        return bars, {"name": spec["name"], "exchange": "Oran", "currency": ""}
+            raise SymbolError("Cannot compute the ratio: the two symbols have no common dates")
+        return bars, {"name": spec["name"], "exchange": "Ratio", "currency": ""}
     if src == "csv":
         path = find_csv(spec["code"])
         if not path:
-            raise SymbolError(f"{spec['code']} için veri dosyası yok. CSV dosyasını grafiğin üzerine sürükleyip bırak "
-                              f"(ör. TradingView → Grafik verisini dışa aktar) ya da data/csv/{spec['code']}.csv olarak koy.")
+            raise SymbolError(f"{spec['code']}: no data file. Drag & drop a CSV file onto the chart "
+                              f"(e.g. TradingView → Export chart data) or save it as data/csv/{spec['code']}.csv.")
         return cached(("csv", path, os.path.getmtime(path)), 3600, lambda: fetch_csv(path))
 
     ttl = {"yahoo": 15 if short else 120, "binance": 10 if short else 120,
@@ -907,13 +907,13 @@ INTERVALS = {"15m": ("15m", 900), "1h": ("1h", 3600), "4h": ("1h", 14400),
 
 def get_series(sym, iv, short=False, ext=False):
     if iv not in INTERVALS:
-        raise SymbolError(f"Geçersiz periyot: {iv}")
+        raise SymbolError(f"Invalid interval: {iv}")
     spec = resolve(sym)
     base, target = INTERVALS[iv]
     ext = ext and spec["src"] == "yahoo" and base != "1d"
     bars, info = load(spec, base, short, ext)
     if not bars:
-        raise SymbolError("Veri yok")
+        raise SymbolError("No data")
     if iv in ("4h", "1w", "1M") and target > median_step(bars) * 1.2:
         bars = resample(bars, iv)
     kind = "line" if all(b[1] == b[2] == b[3] == b[4] for b in bars[-60:]) else "ohlc"
@@ -923,7 +923,7 @@ def get_series(sym, iv, short=False, ext=False):
             "source": SOURCE_LABEL.get(src, src), "kind": kind,
             "lowfreq": spec["lowfreq"], "interval": iv}
     if ext and info.get("session") and info["session"].get("ext"):
-        meta["session"] = info["session"]  # istemci piyasa öncesi/sonrası mumlarının arka planını boyar
+        meta["session"] = info["session"]  # the client shades pre-market / after-hours bars
     return meta, bars
 
 
@@ -949,16 +949,16 @@ def quote(sym):
     except SymbolError as e:
         return {"error": str(e)}
     except Exception as e:
-        return {"error": f"Bağlantı hatası: {e.__class__.__name__}"}
+        return {"error": f"Connection error: {e.__class__.__name__}"}
 
 
 _pool = ThreadPoolExecutor(max_workers=8)
 
 
 # ----------------------------------------------------------------------------
-# Sembol kütüphanesi: ABD hisse listesi (rreichel3/US-Stock-Symbols) + Binance USDT çiftleri.
-# Sadece sembol listesi; fiyat verisi yalnızca açılan sembol için çekilir.
-# İlk aramada yüklenir, bir gün bellekte tutulur (diske yazılmaz).
+# Symbol library: US stock list (rreichel3/US-Stock-Symbols) + Binance USDT pairs.
+# Only the symbol list; prices are fetched only for the symbol you open.
+# Loaded on first search, kept in memory for a day (not written to disk).
 # ----------------------------------------------------------------------------
 US_TICKER_SOURCES = {
     "NASDAQ": "https://raw.githubusercontent.com/rreichel3/US-Stock-Symbols/main/nasdaq/nasdaq_full_tickers.json",
@@ -969,8 +969,8 @@ BINANCE_EXCHANGE_INFO = "https://api.binance.com/api/v3/exchangeInfo?permissions
 POPULAR_COINS = ["BTC", "ETH", "BNB", "SOL", "XRP", "DOGE", "ADA", "TRX", "AVAX", "LINK", "TON",
                  "SUI", "DOT", "LTC", "BCH", "NEAR", "PEPE", "APT", "UNI", "ARB"]
 CATEGORIES = ("all", "stock", "fund", "futures", "forex", "crypto", "index", "economy")
-CAT_LABEL = {"stock": "Hisse", "fund": "Fon", "futures": "Vadeli", "forex": "Forex",
-             "crypto": "Kripto", "index": "Endeks", "economy": "Ekonomi"}
+CAT_LABEL = {"stock": "Stock", "fund": "Fund", "futures": "Futures", "forex": "Forex",
+             "crypto": "Crypto", "index": "Index", "economy": "Economy"}
 YAHOO_CAT = {"EQUITY": "stock", "ETF": "fund", "MUTUALFUND": "fund", "INDEX": "index",
              "FUTURE": "futures", "CURRENCY": "forex", "CRYPTOCURRENCY": "crypto"}
 
@@ -988,7 +988,7 @@ def load_catalog():
                 for e in json.loads(http_get(url, timeout=30)):
                     sym = (e.get("symbol") or "").strip().upper()
                     if not sym or "^" in sym or "." in sym:
-                        continue  # imtiyazlı / sıra dışı pay sınıfları
+                        continue  # preferred / unusual share classes
                     sym = sym.replace("/", "-")
                     if sym in seen:
                         continue
@@ -1015,7 +1015,7 @@ def load_catalog():
             _catalog["stocks"] = stocks
         if crypto:
             _catalog["crypto"] = crypto
-        # hata olduysa 10 dk sonra tekrar dene, yoksa günde bir yenile
+        # on error retry in 10 minutes, otherwise refresh daily
         _catalog["t"] = time.time() + (600 if failed else DAY)
         return _catalog
 
@@ -1054,13 +1054,13 @@ def search(q, cat="all"):
     cat = cat if cat in CATEGORIES else "all"
     uq = q.upper()
     want = lambda c: cat == "all" or c == cat  # noqa: E731
-    found = []  # (skor, -piyasa değeri, kayıt)
+    found = []  # (score, -market cap, record)
 
-    # kısa adlar (GOLD, USDTRY, WALCL...) ve EVDS/CSV
+    # short names (GOLD, USDTRY, WALCL...) and EVDS/CSV
     local = [(k, name, alias_cat(src, code), SOURCE_LABEL[src]) for k, (src, code, name, _m) in ALIASES.items()]
     local += [(k, e["name"], "economy", "TCMB EVDS") for k, e in load_config()["evds_series"].items()]
     if os.path.isdir(CSV_DIR):
-        local += [(os.path.splitext(f)[0].upper(), "CSV dosyası", "economy", "CSV")
+        local += [(os.path.splitext(f)[0].upper(), "CSV file", "economy", "CSV")
                   for f in os.listdir(CSV_DIR) if f.lower().endswith((".csv", ".txt"))]
     for i, (k, name, c, exch) in enumerate(local):
         if not want(c):
@@ -1097,7 +1097,7 @@ def search(q, cat="all"):
         if len(out) >= 40:
             break
 
-    # Yahoo araması: ETF, endeks, vadeli, forex ve ABD dışı hisseler (BIST dahil)
+    # Yahoo search: ETFs, indices, futures, forex and non-US stocks (incl. BIST)
     if q and cat in ("all", "stock", "fund", "index", "futures", "forex"):
         try:
             url = "https://query1.finance.yahoo.com/v1/finance/search?" + urllib.parse.urlencode(
@@ -1110,7 +1110,7 @@ def search(q, cat="all"):
                 seen.add(s.upper())
                 extra.append({"symbol": s, "name": it.get("longname") or it.get("shortname") or "",
                               "exch": it.get("exchDisp") or it.get("exchange") or "", "cat": c})
-            # tam eşleşen Yahoo sonucu (ör. THYAO.IS, QQQ) üstte dursun
+            # keep an exact Yahoo match (e.g. THYAO.IS, QQQ) on top
             top = [e for e in extra if e["symbol"].upper().split(".")[0] == uq]
             out = top + out + [e for e in extra if e not in top]
         except Exception:
@@ -1121,18 +1121,18 @@ def search(q, cat="all"):
 
 
 # ----------------------------------------------------------------------------
-# Logolar: ilk istendiğinde indirilir, data/logos'ta saklanır.
+# Logos: downloaded on first request and kept in data/logos.
 # ----------------------------------------------------------------------------
 LOGO_DIR = os.path.join(DATA_DIR, "logos")
-STOCK_LOGO_SOURCES = [  # FMP küçük şirketleri de kapsar, Parqet yedek
+STOCK_LOGO_SOURCES = [  # FMP also covers small caps, Parqet as fallback
     "https://images.financialmodelingprep.com/symbol/{s}.png",
     "https://assets.parqet.com/logos/symbol/{s}",
 ]
-CRYPTO_LOGO_SOURCES = [  # spothq + yeni coinler için CoinCap
+CRYPTO_LOGO_SOURCES = [  # spothq + CoinCap for newer coins
     "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/svg/color/{l}.svg",
     "https://assets.coincap.io/assets/icons/{l}@2x.png",
 ]
-FLAG_SOURCE = "https://hatscripts.github.io/circle-flags/flags/{c}.svg"  # Windows emoji bayrak göstermez
+FLAG_SOURCE = "https://hatscripts.github.io/circle-flags/flags/{c}.svg"  # Windows does not render flag emoji
 FX_FLAGS = {"USD": "us", "EUR": "eu", "TRY": "tr", "GBP": "gb", "JPY": "jp", "CHF": "ch", "CAD": "ca",
             "AUD": "au", "NZD": "nz", "CNY": "cn", "CNH": "cn", "RUB": "ru", "SEK": "se", "NOK": "no",
             "DKK": "dk", "PLN": "pl", "ZAR": "za", "MXN": "mx", "BRL": "br", "INR": "in", "KRW": "kr",
@@ -1140,9 +1140,9 @@ FX_FLAGS = {"USD": "us", "EUR": "eu", "TRY": "tr", "GBP": "gb", "JPY": "jp", "CH
 
 
 def logo_target(sym):
-    """Sembol -> (tür, kimlik): ('stock','AAPL'), ('crypto','BTC'), ('flag','tr') ya da (None, None)."""
+    """Symbol -> (kind, id): ('stock','AAPL'), ('crypto','BTC'), ('flag','tr') or (None, None)."""
     s = (sym or "").strip().upper()
-    if "/" in s:  # oranlarda ilk sembolün logosu
+    if "/" in s:  # for ratios, the first symbol's logo
         s = s.split("/", 1)[0].strip()
     if s in load_config()["evds_series"]:
         return "flag", "tr"
@@ -1158,7 +1158,7 @@ def logo_target(sym):
             return "flag", FX_FLAGS.get(s[:3])
         if code.startswith("^") or code == "DX-Y.NYB":
             return "flag", "us"
-        return None, None  # emtia vadelileri: harfli simge
+        return None, None  # commodity futures: letter icon
     if ":" in s:
         prefix, rest = (x.strip() for x in s.split(":", 1))
         if prefix == "FRED":
@@ -1199,7 +1199,7 @@ def get_logo(sym="", flag=""):
                 return f.read(), ctype
     miss = os.path.join(LOGO_DIR, key + ".none")
     if os.path.exists(miss) and os.path.getmtime(miss) > time.time() - 7 * DAY:
-        return None  # yakın zamanda bulunamadı, kaynakları tekrar yorma
+        return None  # not found recently, don't hammer the sources
     if kind == "flag":
         urls = [FLAG_SOURCE.format(c=safe.lower())]
     elif kind == "crypto":
@@ -1229,7 +1229,7 @@ def get_logo(sym="", flag=""):
 
 
 # ----------------------------------------------------------------------------
-# kalıcı kayıtlar
+# persistent storage
 # ----------------------------------------------------------------------------
 _file_lock = threading.RLock()
 
@@ -1257,16 +1257,16 @@ def sym_key(s):
     return (s or "").strip().upper()
 
 
-REV_KEY = "__rev__"  # drawings.json içinde sembol başına sürüm numaraları
+REV_KEY = "__rev__"  # per-symbol revision numbers inside drawings.json
 
 
 def save_csv(symbol, raw):
-    """Sürükle-bırak ile gelen CSV'yi doğrula ve data/csv/SEMBOL.csv olarak kaydet."""
+    """Validate a drag & dropped CSV and save it as data/csv/SYMBOL.csv."""
     name = re.sub(r"[^A-Z0-9_.\-]", "", sym_key(symbol).replace("/", "_"))
     if not name:
-        raise SymbolError("Geçersiz sembol adı")
+        raise SymbolError("Invalid symbol name")
     if name in ALIASES and ALIASES[name][0] != "csv":
-        raise SymbolError(f"{name} zaten {SOURCE_LABEL[ALIASES[name][0]]} kaynağından geliyor; başka bir ad seç.")
+        raise SymbolError(f"{name} already comes from {SOURCE_LABEL[ALIASES[name][0]]}; choose another name.")
     os.makedirs(CSV_DIR, exist_ok=True)
     tmp = os.path.join(CSV_DIR, f".{name}.upload")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -1312,7 +1312,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "public, max-age=604800")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", "script-src 'none'")  # dış SVG'ler betik çalıştıramasın
+        self.send_header("Content-Security-Policy", "script-src 'none'")  # external SVGs must not run scripts
         try:
             self.end_headers()
             self.wfile.write(data)
@@ -1327,28 +1327,28 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             self.end_headers()
             self.wfile.write(body)
-        except ConnectionError:  # tarayıcı isteği yarıda kesti (sayfa yenilendi vb.) — sorun değil
+        except ConnectionError:  # the browser aborted the request (page reload etc.) — harmless
             self.close_connection = True
 
     def read_raw(self, limit=50 * 1024 * 1024):
         n = int(self.headers.get("Content-Length") or 0)
         if n > limit:
-            raise ValueError("istek çok büyük")
+            raise ValueError("request too large")
         return self.rfile.read(n)
 
     def read_body(self):
         return json.loads(self.read_raw().decode("utf-8") or "null")
 
     def blocked(self, method):
-        """Başka sitelerin bu yerel sunucuya istek atmasını engelle (CSRF / DNS rebinding)."""
+        """Block requests to this local server from other websites (CSRF / DNS rebinding)."""
         allowed = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
         if (self.headers.get("Host") or "").lower() not in allowed:
             return True
         origin = (self.headers.get("Origin") or "").rstrip("/").lower()
         if origin and origin not in {f"http://{h}" for h in allowed}:
             return True
-        # özel başlık: tarayıcı başka siteden bunu ön-izinsiz gönderemez
-        return method == "POST" and self.headers.get("X-Grafik") != "1"
+        # custom header: a browser cannot send it from another site without a preflight
+        return method == "POST" and self.headers.get("X-Guraydingview") != "1"
 
     def do_GET(self):
         self._cacheable = False
@@ -1370,8 +1370,8 @@ class Handler(SimpleHTTPRequestHandler):
             return (qs.get(k) or [d])[0]
 
         if self.blocked(method):
-            return self.send_json({"error": "Bu istek yalnızca Grafik Masası sayfasından yapılabilir. "
-                                            "Eski bir sekme açıksa onu kapatıp sayfayı yenile (Ctrl+F5)."}, 403)
+            return self.send_json({"error": "This request is only allowed from the Guraydingview page. "
+                                            "If an old tab is open, close it and reload the page (Ctrl+F5)."}, 403)
         try:
             if u.path == "/api/bars":
                 meta, bars = get_series(arg("symbol"), arg("interval", "1d"), arg("short") == "1", arg("ext") == "1")
@@ -1396,25 +1396,25 @@ class Handler(SimpleHTTPRequestHandler):
                 if method == "POST":
                     wl = self.read_body()
                     if not isinstance(wl, dict) or not isinstance(wl.get("groups"), list):
-                        return self.send_json({"error": "geçersiz liste"}, 400)
+                        return self.send_json({"error": "invalid list"}, 400)
                     write_json(WATCHLIST_FILE, wl)
                     return self.send_json({"ok": True})
                 return self.send_json(read_json(WATCHLIST_FILE, DEFAULT_WATCHLIST))
             if u.path == "/api/drawings":
-                # Her sembolün bir sürüm numarası var: eski bir sekme (ya da yüklenemeyen çizimler)
-                # daha yeni kaydın üstüne yazamaz — 409 alır ve güncel hali yükler.
+                # Each symbol has a revision number: a stale tab (or drawings that failed to load)
+                # cannot overwrite a newer save — it gets 409 and loads the latest version.
                 key = sym_key(arg("symbol"))
                 if method == "POST":
                     body = self.read_body()
                     if not isinstance(body, dict) or not isinstance(body.get("items"), list):
-                        return self.send_json({"error": "Sayfa eski sürüm — yenile (Ctrl+F5)."}, 409)
+                        return self.send_json({"error": "This page is out of date — reload it (Ctrl+F5)."}, 409)
                     items = body["items"]
                     with _file_lock:
                         data = read_json(DRAWINGS_FILE, {})
                         revs = data.setdefault(REV_KEY, {})
                         cur = int(revs.get(key, 0))
                         if int(body.get("rev", -1)) != cur:
-                            return self.send_json({"error": "Çizimler başka bir sekmede değişmiş; güncel hali yüklendi.",
+                            return self.send_json({"error": "The drawings were changed in another tab; the latest version was loaded.",
                                                    "items": data.get(key, []), "rev": cur}, 409)
                         if items:
                             data[key] = items
@@ -1445,7 +1445,7 @@ class Handler(SimpleHTTPRequestHandler):
                             cfg["evds_series"] = cur
                         write_json(CONFIG_FILE, cfg)
                     with _cache_lock:
-                        _cache.clear()  # kod/çarpan/anahtar değişti: eski veriyi unut
+                        _cache.clear()  # code/multiplier/key changed: forget cached data
                 cfg = load_config()
                 key = cfg["evds_key"]
                 return self.send_json({"evds_key_set": bool(key), "evds_key_hint": ("…" + key[-4:]) if key else "",
@@ -1458,17 +1458,17 @@ class Handler(SimpleHTTPRequestHandler):
         except SymbolError as e:
             return self.send_json({"error": str(e)}, 404)
         except ConnectionError:
-            self.close_connection = True  # tarayıcı bağlantıyı kapattı
+            self.close_connection = True  # the browser closed the connection
         except Exception as e:
             traceback.print_exc()
-            return self.send_json({"error": f"Sunucu hatası: {e}"}, 502)
+            return self.send_json({"error": f"Server error: {e}"}, 502)
 
 
 class QuietServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def handle_error(self, request, client_address):
-        # tarayıcının yarıda kestiği bağlantılar (WinError 10053/10054) için iz basma
+        # no traceback for connections the browser aborted (WinError 10053/10054)
         if isinstance(sys.exc_info()[1], ConnectionError):
             return
         super().handle_error(request, client_address)
@@ -1481,17 +1481,17 @@ def main():
         except Exception:
             pass
     os.makedirs(CSV_DIR, exist_ok=True)
-    if os.path.exists(DRAWINGS_FILE):  # her açılışta çizimlerin yedeği
+    if os.path.exists(DRAWINGS_FILE):  # back up the drawings on every start
         shutil.copyfile(DRAWINGS_FILE, os.path.join(DATA_DIR, "drawings.backup.json"))
     url = f"http://{HOST}:{PORT}/"
     try:
         srv = QuietServer((HOST, PORT), Handler)
     except OSError:
-        print(f"Port {PORT} kullanımda — Grafik Masası zaten çalışıyor olabilir: {url}")
+        print(f"Port {PORT} is in use — Guraydingview may already be running: {url}")
         if "--open" in sys.argv:
             webbrowser.open(url)
         return
-    print(f"Grafik Masası çalışıyor: {url}   (kapatmak için bu pencereyi kapat / Ctrl+C)")
+    print(f"Guraydingview is running: {url}   (close this window or press Ctrl+C to stop)")
     if "--open" in sys.argv:
         threading.Timer(0.7, lambda: webbrowser.open(url)).start()
     try:

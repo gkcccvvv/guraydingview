@@ -1,38 +1,44 @@
-# Guraydingview — Grafik Masası
+# Guraydingview
 
-TradingView benzeri, **çizim sınırı olmayan**, kendi bilgisayarında çalışan ücretsiz grafik uygulaması.
-Hisse, ETF, kripto, emtia, döviz, BIST ve makro veriler (Fed bilançosu, M2, ISM, TCMB para arzı…) tek ekranda;
-istediğin kadar trend çizgisi, Fibonacci, kanal, kutu, yazı…
+A free, local, TradingView-style charting app with **unlimited drawings**.
+Stocks, ETFs, crypto, commodities, forex, Borsa Istanbul and macro data (Fed balance sheet, M2, ISM, Turkish money
+supply…) on one screen — draw as many trend lines, Fibonacci levels, channels, boxes and notes as you like.
 
-![Grafik Masası](docs/ekran.png)
+![Guraydingview](docs/screenshot.png)
 
-## Özellikler
+## Features
 
-- **Sınırsız çizim:** trend, ışın, uzatılmış çizgi, yatay/dikey çizgi, paralel kanal, dikdörtgen, elips, Fibonacci,
-  kalıcı tarih aralığı, metin, ölçüm. Çizimler her sembol için ayrı kaydedilir, periyot değişince yerinde kalır.
-- **TradingView gibi stil:** çizgi rengi/opaklığı/kalınlığı/stili, arka plan rengi ve sertliği, her çizime metin
-  (renk, boyut, kalın/italik, hizalama), kilitleme, geri al/yinele, kopyala/yapıştır.
-- **Watchlist:** bölümler, sürükle-bırak sıralama, logolar ve bayraklar, canlı fiyat/değişim.
-- **Sembol arama:** kategorili (Hisse, Fon, Vadeli, Forex, Kripto, Endeks, Ekonomi); tüm ABD hisseleri ve Binance USDT çiftleri.
-- **Oran grafikleri:** `GOLD/SILVER`, `XU030/USDTRY`, `GOLD/BTCUSD` gibi.
-- **Piyasa öncesi / sonrası** (ABD hisse ve ETF): gün içi mumlar, renkli seans arka planı, watchlist işareti, fiyat çizgisi.
-- **Makro veriler:** FRED, ISM (PMI, Yeni Siparişler, Stoklar, İstihdam), TCMB EVDS (M1, M2 ve diğer seriler).
-- **Kendi verin:** CSV dosyasını grafiğe sürükle-bırak.
-- **Grafik stili:** mum/çizgi renkleri, arka plan, ızgara, son fiyat çizgisi — renklerde opaklık ayarı.
-- **Konsolsuz çalışma (Windows):** saatin yanında simge; sağ tık menüsünde aç, yeniden başlat, verileri yenile,
-  kayıt dosyası, Windows açılınca başlat, çıkış.
+- **Unlimited drawings:** trend line, ray, extended line, horizontal / vertical line, parallel channel, rectangle,
+  ellipse, Fibonacci retracement, date range, text, measure. Saved per symbol; they stay in place when you change the interval.
+- **TradingView-like styling:** line color / opacity / width / style, background color and opacity, text on any
+  drawing (color, size, bold / italic, alignment), lock, undo / redo, copy / paste.
+- **Remembers your view:** every chart (symbol + interval) reopens exactly how you left it — zoom, scroll and a
+  manually adjusted price scale.
+- **Watchlist:** sections, drag & drop ordering, logos and flags, live price and change.
+- **Symbol search** with categories (Stocks, Funds, Futures, Forex, Crypto, Indices, Economy): all US stocks and
+  every Binance USDT pair.
+- **Ratio charts:** `GOLD/SILVER`, `XU030/USDTRY`, `GOLD/BTCUSD`…
+- **Pre-market / after hours** (US stocks and ETFs): intraday bars with shaded sessions, watchlist marker, price line.
+- **Macro data:** FRED, ISM (PMI, New Orders, Inventories, Employment), Turkish central bank EVDS (M1, M2 and any series).
+- **Your own data:** drag & drop a CSV file onto the chart.
+- **Chart style:** candle / line colors, background, grid, last price line, pre-market / after-hours colors — with opacity.
+- **No console window (Windows):** an icon next to the clock with a right-click menu — open, restart, refresh data,
+  log file, folder, desktop / Start menu shortcut, start with Windows, exit.
 
-## Kurulum
+## Installation
 
-Gereken tek şey **Python 3.9+** ([python.org](https://www.python.org/downloads/)). Ek paket yok, sadece standart kütüphane.
+The only requirement is **Python 3.9+** ([python.org](https://www.python.org/downloads/)). No packages to install —
+standard library only.
 
 ```bash
 git clone https://github.com/gkcccvvv/guraydingview.git
 cd guraydingview
 ```
 
-**Windows:** `Grafik Masasi.pyw` (ya da `Baslat.bat`) dosyasına çift tıkla. Konsol açılmaz; saatin yanına simge gelir
-ve tarayıcıda http://127.0.0.1:8765 açılır. Sorun giderirken konsollu açmak için `Baslat (konsol).bat`.
+**Windows:** double-click `Guraydingview.pyw` or `Start.bat`. No console window opens; an icon appears next to the
+clock and http://127.0.0.1:8765 opens in your browser. On first start a **`Guraydingview` shortcut with the app icon**
+is created in the folder — use it as the launcher (or right-click the tray icon → *Create desktop shortcut* /
+*Add to Start menu*). For troubleshooting, `Start (console).bat` runs the server in a console window.
 
 **macOS / Linux:**
 
@@ -40,82 +46,72 @@ ve tarayıcıda http://127.0.0.1:8765 açılır. Sorun giderirken konsollu açma
 python3 server.py --open
 ```
 
-Sunucu yalnızca `127.0.0.1` üzerinde dinler; başka bilgisayarlardan erişilemez. Kişisel verilerin (çizimler,
-watchlist, ayarlar, EVDS anahtarı) `data/` klasöründe durur ve git'e eklenmez.
+The server only listens on `127.0.0.1`, so other computers cannot reach it. Your personal data (drawings, watchlist,
+settings, EVDS key) lives in the `data/` folder and is never committed to git.
 
-## Semboller
+## Symbols
 
-Sol üstteki büyüteç ya da grafikteyken bir harf yazmak sembol aramayı açar.
+Click the magnifier (top left) or just start typing on the chart.
 
-| Yazdığın | Kaynak |
+| Type | Source |
 |---|---|
 | `GOOGL`, `VT`, `THYAO.IS`, `EURUSD=X`, `^GSPC` | Yahoo Finance |
-| `GOLD`, `SILVER`, `USDTRY`, `XU030`, `SPX`, `DXY` | Yahoo (kısa adlar) |
+| `GOLD`, `SILVER`, `USDTRY`, `XU030`, `SPX`, `DXY` | Yahoo (short names) |
 | `BTCUSD`, `ETHUSDT`, `BINANCE:SOLUSDT` | Binance |
 | `WALCL`, `USM2`, `TCU`, `M2V`, `FRED:UNRATE` | FRED |
-| `USBCOI`, `USMNO`, `USISMMI`, `USISMEMP` | ISM İmalat (PMI, Yeni Siparişler, Stoklar, İstihdam) |
-| `TRM1`, `TRM2`, `EVDS:TP.DK.USD.A.YTL` | TCMB EVDS (ücretsiz API anahtarı gerekir) |
-| `GOLD/SILVER`, `XU030/USDTRY` | İki sembolün oranı |
-| Herhangi bir ad | `data/csv/AD.csv` ya da grafiğe sürükle-bırak CSV |
+| `USBCOI`, `USMNO`, `USISMMI`, `USISMEMP` | ISM Manufacturing (PMI, New Orders, Inventories, Employment) |
+| `TRM1`, `TRM2`, `EVDS:TP.DK.USD.A.YTL` | TCMB EVDS (free API key needed) |
+| `GOLD/SILVER`, `XU030/USDTRY` | Ratio of two symbols |
+| Any name | `data/csv/NAME.csv`, or drag & drop a CSV |
 
 ### TCMB EVDS (TRM1, TRM2)
 
-1. https://evds3.tcmb.gov.tr → giriş yap / üye ol → kullanıcı adın → Profil → **API Anahtarı** (ücretsiz).
-2. Uygulamada ⚙ → **TCMB EVDS** sekmesi → anahtarı yapıştır → **Kaydet ve test et**.
-3. TRM1/TRM2 varsayılan olarak TCMB'nin haftalık "Para Arzı" tablosuna bağlı (bin TL × 1000).
-   Başka bir seri için sembol aramaya `EVDS:SERİ.KODU` yaz.
+1. https://evds3.tcmb.gov.tr → sign in / sign up → your user name → Profile → **API Key** (free).
+2. In the app: ⚙ → **TCMB EVDS** tab → paste the key → **Save and test**.
+3. TRM1 / TRM2 point to TCMB's weekly "Money Supply" table (thousand TL × 1000).
+   For any other series, type `EVDS:SERIES.CODE` in symbol search.
 
-### ISM verileri
+### ISM data
 
-2013'ten itibaren [sofiaverma06/ism-feed](https://github.com/sofiaverma06/ism-feed) dosyasından gelir
-(ISM'in aylık basın bülteninden otomatik güncellenir). Değerler TradingView gibi açıklandığı aya konur.
+Since 2013 from [sofiaverma06/ism-feed](https://github.com/sofiaverma06/ism-feed) (updated automatically from ISM's
+monthly release). Values are placed on their release month, like TradingView.
 
-**1959–2012 geçmişi (isteğe bağlı):** [FRED-MD sayfasından](https://www.stlouisfed.org/research/economists/mccracken/fred-databases)
-"Historical Vintages of FRED-MD 2015-01 to 2025-12 (.zip)" dosyasını tarayıcınla indir. Uygulama onu proje klasöründe
-ya da İndirilenler'de bulur, 2016-05 sürümündeki ISM serilerini çıkarıp 2013 sonrasıyla birleştirir.
+**1959–2012 history (optional):** download "Historical Vintages of FRED-MD 2015-01 to 2025-12 (.zip)" from the
+[FRED-MD page](https://www.stlouisfed.org/research/economists/mccracken/fred-databases) with your browser. The app
+finds it in the project folder or in Downloads, extracts the ISM series from the 2016-05 vintage and merges them
+with the data since 2013.
 
-### Kendi verin (CSV)
+### Your own data (CSV)
 
-CSV'yi grafiğin üzerine sürükle-bırak (ya da watchlist ⋯ → CSV içe aktar); sembol adını sorar.
-Satırlar `tarih,değer` ya da `tarih,açılış,yüksek,düşük,kapanış`; ayraç `,` veya `;`.
-Tarih biçimleri: `2026-11-01`, `01.11.2026`, `2026-11`, unix zaman damgası. TradingView'in dışa aktardığı CSV doğrudan okunur.
+Drop a CSV file onto the chart (or watchlist ⋯ → *Import CSV…*); you'll be asked for a symbol name.
+Rows: `date,value` or `date,open,high,low,close`, separated by `,` or `;`. Dates: `2026-11-01`, `01.11.2026`,
+`2026-11` or a unix timestamp. CSV files exported from TradingView are read directly.
 
-## Kullanım ipuçları
+## Tips
 
-- Çizime **çift tıkla** ya da üstteki ⚙: **Stil** ve **Metin** sekmeleri.
-- **Shift + sürükle:** hızlı ölçüm · **Alt+T/H/V/F/C/R/E:** trend / yatay / dikey / Fibonacci / kanal / dikdörtgen / elips
-- **Del:** sil · **Ctrl+Z / Ctrl+Y:** geri al / yinele · **Ctrl+C / Ctrl+V:** kopyala / yapıştır (başka sembole de)
-- **↑ / ↓:** watchlist'te önceki / sonraki sembol · Tüm kısayollar: sağ üstteki **?**
-- Alt çubuk: **ETH** (piyasa öncesi/sonrası), **%**, **log**, **auto** ölçek.
-- ⚙ → **Grafik stili:** çizgi/mum renkleri, arka plan, ızgara, son fiyat çizgisi, piyasa öncesi/sonrası renkleri.
-- Adres çubuğundan doğrudan açma: `http://127.0.0.1:8765/?symbol=GOOGL&interval=1h`
+- **Double-click** a drawing (or the ⚙ on its toolbar): **Style** and **Text** tabs.
+- **Shift + drag:** quick measure · **Alt+T/H/V/F/C/R/E:** trend / horizontal / vertical / Fibonacci / channel / rectangle / ellipse
+- **Del:** delete · **Ctrl+Z / Ctrl+Y:** undo / redo · **Ctrl+C / Ctrl+V:** copy / paste (also onto another symbol)
+- **↑ / ↓:** previous / next symbol in the watchlist · all shortcuts: **?** (top right)
+- Bottom bar: **ETH** (pre-market / after hours), **%**, **log**, **auto** scale.
+- ⚙ → **Chart style:** line / candle colors, background, grid, last price line, pre-market / after-hours colors.
+- Open a chart directly: `http://127.0.0.1:8765/?symbol=GOOGL&interval=1h`
 
-## Veri kaynakları ve uyarılar
+## Data sources and notes
 
-- Fiyatlar: **Yahoo Finance** ve **Binance** herkese açık uç noktaları; makro: **FRED**, **TCMB EVDS**, ism-feed.
-  Yahoo uç noktaları resmi/belgelenmiş değildir; değişirse güncelleme gerekebilir.
-- Sembol listeleri: [rreichel3/US-Stock-Symbols](https://github.com/rreichel3/US-Stock-Symbols) ve Binance `exchangeInfo`.
-  Logolar ilk görüldüğünde financialmodelingprep / parqet / spothq cryptocurrency-icons / CoinCap / circle-flags'ten
-  çekilip yerelde önbelleklenir; logolar sahiplerine aittir.
-- Veriler gecikmeli olabilir ve **kişisel kullanım** içindir; ISM verileri Institute for Supply Management'a aittir.
-- Bu proje **yatırım tavsiyesi değildir** ve TradingView ile bağlantılı değildir.
+- Prices: public **Yahoo Finance** and **Binance** endpoints; macro: **FRED**, **TCMB EVDS**, ism-feed.
+  The Yahoo endpoints are not official or documented and may change.
+- Symbol lists: [rreichel3/US-Stock-Symbols](https://github.com/rreichel3/US-Stock-Symbols) and Binance `exchangeInfo`.
+  Logos are fetched on first use from financialmodelingprep / parqet / spothq cryptocurrency-icons / CoinCap /
+  circle-flags and cached locally; logos belong to their owners.
+- Data may be delayed and is for **personal use**; ISM data belongs to the Institute for Supply Management.
+- This project is **not investment advice** and is not affiliated with TradingView.
 
-## Üçüncü taraf yazılım
+## Third-party software
 
-Grafikler [TradingView Lightweight Charts™](https://github.com/tradingview/lightweight-charts) ile çizilir
-(Copyright © TradingView, Inc., Apache License 2.0 — bkz. `static/lib/LICENSE-lightweight-charts.txt`).
+Charts are drawn with [TradingView Lightweight Charts™](https://github.com/tradingview/lightweight-charts)
+(Copyright © TradingView, Inc., Apache License 2.0 — see `static/lib/LICENSE-lightweight-charts.txt`).
 
-## Lisans
+## License
 
-MIT — bkz. [LICENSE](LICENSE).
-
----
-
-### English
-
-**Guraydingview** is a free, local, TradingView-style charting app with **unlimited drawings** (trend lines, rays,
-channels, rectangles, ellipses, Fibonacci, date ranges, text…), a watchlist with logos, category symbol search
-(all US stocks + Binance USDT pairs), ratio charts, pre/post-market data, and macro series (FRED, ISM, Turkish
-central bank EVDS). Pure Python standard library + a static web UI; runs on `127.0.0.1`.
-Run `Grafik Masasi.pyw` on Windows (tray icon) or `python3 server.py --open` anywhere. UI language: Turkish.
-Not investment advice; not affiliated with TradingView.
+MIT — see [LICENSE](LICENSE).

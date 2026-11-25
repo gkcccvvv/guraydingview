@@ -1,4 +1,4 @@
-// Grafik Masası — ana uygulama
+// Guraydingview — main application
 import { DrawingEngine, FILLABLE, TEXTABLE, alpha } from './drawings.js';
 
 const LC = window.LightweightCharts;
@@ -6,11 +6,11 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const enc = encodeURIComponent;
 const FONT = '-apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif';
-const TZ = 3 * 3600; // İstanbul, UTC+3
-const MONTHS = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
-const DAYS = ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'];
+const TZ = 3 * 3600; // Istanbul, UTC+3
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const C = { bg: '#0f0f0f', grid: 'rgba(242,242,242,0.06)', text: '#b2b5be', up: '#089981', down: '#f23645', line: '#2962ff', border: '#2e2e2e' };
-// TradingView renk paleti: üstte griler, altında 10 renk tonu × 7 açıklık
+// TradingView-style palette: grays on top, then 10 hues in 6 shades
 const PALETTE_ROWS = [
   ['#ffffff', '#d1d4dc', '#b2b5be', '#9598a1', '#787b86', '#5d606b', '#434651', '#2a2e39', '#131722', '#000000'],
   ['#f23645', '#ff9800', '#ffeb3b', '#4caf50', '#089981', '#00bcd4', '#2962ff', '#673ab7', '#9c27b0', '#e91e63'],
@@ -65,28 +65,28 @@ const ICONS = {
 const svg = (name, size = 28) => `<svg viewBox="0 0 28 28" width="${size}" height="${size}">${ICONS[name]}</svg>`;
 
 const TOOLBAR = [
-  ['cursor', 'İmleç (Esc)'], '|',
-  ['trend', 'Trend çizgisi (Alt+T)'], ['ray', 'Işın'], ['extended', 'Uzatılmış çizgi'],
-  ['hline', 'Yatay çizgi (Alt+H)'], ['hray', 'Yatay ışın (Alt+J)'], ['vline', 'Dikey çizgi (Alt+V)'],
-  ['channel', 'Paralel kanal (Alt+C)'], ['rect', 'Dikdörtgen (Alt+R)'], ['ellipse', 'Elips / daire (Alt+E)'],
-  ['fib', 'Fibonacci düzeltme (Alt+F)'], ['daterange', 'Tarih aralığı (kalıcı)'],
-  ['text', 'Metin'], ['measure', 'Ölç (Shift + sürükle)'], '|',
-  ['magnet', 'Mıknatıs: noktayı mumun O/H/L/C değerine yapıştır'], ['stay', 'Çizim modunda kal'],
-  ['hide', 'Çizimleri gizle / göster'], ['trash', 'Bu sembolün tüm çizimlerini sil'],
+  ['cursor', 'Cursor (Esc)'], '|',
+  ['trend', 'Trend line (Alt+T)'], ['ray', 'Ray'], ['extended', 'Extended line'],
+  ['hline', 'Horizontal line (Alt+H)'], ['hray', 'Horizontal ray (Alt+J)'], ['vline', 'Vertical line (Alt+V)'],
+  ['channel', 'Parallel channel (Alt+C)'], ['rect', 'Rectangle (Alt+R)'], ['ellipse', 'Ellipse / circle (Alt+E)'],
+  ['fib', 'Fibonacci retracement (Alt+F)'], ['daterange', 'Date range'],
+  ['text', 'Text'], ['measure', 'Measure (Shift + drag)'], '|',
+  ['magnet', 'Magnet: snap points to the bar O/H/L/C'], ['stay', 'Stay in drawing mode'],
+  ['hide', 'Hide / show drawings'], ['trash', 'Remove all drawings on this symbol'],
 ];
 
-// ------------------------------------------------------------------ yardımcılar
+// ------------------------------------------------------------------ helpers
 const store = {
   get(k, d) { try { const v = localStorage.getItem('gm.' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
-  set(k, v) { try { localStorage.setItem('gm.' + k, JSON.stringify(v)); } catch (_) { /* yok say */ } },
+  set(k, v) { try { localStorage.setItem('gm.' + k, JSON.stringify(v)); } catch (_) { /* ignore */ } },
 };
 
 async function api(path, opts = {}) {
-  // POST'larda özel başlık: sunucu başka sitelerden gelen istekleri bununla ayırt ediyor
-  if (opts.method && opts.method !== 'GET') opts.headers = { 'X-Grafik': '1', 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  // custom header on POSTs: the server uses it to reject requests coming from other websites
+  if (opts.method && opts.method !== 'GET') opts.headers = { 'X-Guraydingview': '1', 'Content-Type': 'application/json', ...(opts.headers || {}) };
   const r = await fetch(path, opts);
   let j = null;
-  try { j = await r.json(); } catch (_) { /* boş gövde */ }
+  try { j = await r.json(); } catch (_) { /* empty body */ }
   if (!r.ok) {
     const err = new Error((j && j.error) || `HTTP ${r.status}`);
     err.status = r.status;
@@ -157,18 +157,18 @@ function iconFor(sym) {
   else if (/^(WALCL|USM2|TCU|M2V|UNRATE|SHILLER|FRED:)/.test(s)) bg = '#3c3b6e';
   else if (/^(EVDS|TCMB):/.test(s)) bg = '#e30a17';
   const letter = (s.replace(/^[A-Z]+:/, '').match(/[A-Z0-9]/) || ['?'])[0];
-  // döviz çiftleri: TradingView gibi iki bayrak üst üste
+  // currency pairs: two overlapping flags, like TradingView
   const fx = s.split('/')[0].match(/^([A-Z]{3})([A-Z]{3})$/);
   if (fx && FX_FLAGS[fx[1]] && FX_FLAGS[fx[2]]) {
     return `<span class="ico ico-fx" style="background:${bg}">${esc(letter)}`
       + `<img src="/api/logo?flag=${FX_FLAGS[fx[1]]}" alt="" loading="lazy" onerror="this.remove()">`
       + `<img src="/api/logo?flag=${FX_FLAGS[fx[2]]}" alt="" loading="lazy" onerror="this.remove()"></span>`;
   }
-  // logo yoksa (404) resim kendini siler, alttaki harf görünür
+  // no logo (404): the image removes itself and the letter underneath shows
   return `<span class="ico" style="background:${bg}">${esc(letter)}`
     + `<img src="/api/logo?symbol=${enc(s)}" alt="" loading="lazy" onerror="this.remove()" onload="logoBg(this)"></span>`;
 }
-// Şeffaf zeminli açık renkli logolar (ör. beyaz yazı) açık zeminde kaybolmasın: koyu zemine al
+// light logos on a transparent background (e.g. white text) would vanish on a light circle: use a dark one
 window.logoBg = (img) => {
   try {
     const c = document.createElement('canvas');
@@ -183,7 +183,7 @@ window.logoBg = (img) => {
       lum += (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
     }
     if (n && clear > 25 && lum / n > 0.8) img.style.background = '#2a2a2a';
-  } catch (_) { /* yok say */ }
+  } catch (_) { /* ignore */ }
 };
 const FX_FLAGS = {
   USD: 'us', EUR: 'eu', TRY: 'tr', GBP: 'gb', JPY: 'jp', CHF: 'ch', CAD: 'ca', AUD: 'au', NZD: 'nz', CNY: 'cn',
@@ -192,13 +192,13 @@ const FX_FLAGS = {
 };
 
 // ------------------------------------------------------------------ durum
-const urlParams = new URLSearchParams(location.search); // ?symbol=USMNO&interval=1w ile doğrudan açılış
+const urlParams = new URLSearchParams(location.search); // open directly with ?symbol=USMNO&interval=1w
 const state = {
   symbol: (urlParams.get('symbol') || store.get('symbol', 'BTCUSD')).toUpperCase(),
   interval: ['15m', '1h', '4h', '1d', '1w', '1M'].includes(urlParams.get('interval')) ? urlParams.get('interval') : store.get('interval', '1d'),
   chartType: store.get('chartType', 'candles'),
   scaleMode: store.get('scaleMode', 0),
-  ext: store.get('extHours', true), // piyasa öncesi / sonrası (uzatılmış seans)
+  ext: store.get('extHours', true), // pre-market / after hours (extended session)
   meta: null,
   bars: [],
   dec: 2,
@@ -208,12 +208,12 @@ const state = {
 };
 
 // ------------------------------------------------------------------ grafik
-// Grafik stili (Ayarlar → Grafik): tarayıcıda saklanır
+// chart style (Settings → Chart style), kept in the browser
 const CS_DEFAULT = {
   bg: C.bg, text: C.text, grid: true, gridColor: C.grid,
   up: C.up, down: C.down, border: false, wick: true,
   lineColor: C.line, lineWidth: 2, priceLine: true, priceLineColor: '', priceLineStyle: 2,
-  // piyasa öncesi / sonrası (TradingView gibi turuncu)
+  // pre-market / after hours (orange, like TradingView)
   extPreColor: '#ff9800', extPostColor: '#ff9800', extLine: true, extLineStyle: 2,
   preBg: 'rgba(255,152,0,0.07)', postBg: 'rgba(41,98,255,0.09)',
 };
@@ -267,7 +267,7 @@ function applyChartStyle() {
   store.set('chartStyle', CS);
   chart.applyOptions(chartLayout());
   if (series) series.applyOptions(seriesStyle(effType()));
-  shade.set(sessionFlags()); // arka plan renkleri
+  shade.set(sessionFlags()); // session background colors
   updateExtLine();
   renderWatchlist();
   renderDetail();
@@ -276,7 +276,7 @@ function applyChartStyle() {
 const effType = () => (state.meta?.kind === 'line' ? 'line' : state.chartType);
 const toSeriesData = (bars, type) => (type === 'line' ? bars.map((b) => ({ time: b.time, value: b.close })) : bars);
 
-// ---- piyasa öncesi / sonrası: mumların arka planını TradingView gibi boya
+// ---- pre-market / after hours: shade those bars' background like TradingView
 const extColor = (session) => (session === 'pre' ? CS.extPreColor : CS.extPostColor);
 class SessionShade {
   constructor() {
@@ -318,7 +318,7 @@ function sessionFlags() {
   });
 }
 
-// günlük ve üstü periyotlarda piyasa öncesi/sonrası fiyatını yatay çizgi olarak göster
+// on daily and higher intervals, show the pre-market / after-hours price as a horizontal line
 let extLine = null;
 function updateExtLine() {
   const q = state.quotes[state.symbol];
@@ -326,14 +326,14 @@ function updateExtLine() {
   if (!ext) { if (extLine && series) series.removePriceLine(extLine); extLine = null; return; }
   const opts = {
     price: ext.price, color: extColor(ext.session), lineWidth: 1, lineStyle: CS.extLineStyle,
-    axisLabelVisible: true, title: ext.session === 'pre' ? 'Öncesi' : 'Sonrası',
+    axisLabelVisible: true, title: ext.session === 'pre' ? 'Pre' : 'Post',
   };
   if (extLine) extLine.applyOptions(opts); else extLine = series.createPriceLine(opts);
 }
 
 function rebuildSeries() {
   engine.setSeries(null);
-  if (series) { try { series.detachPrimitive(shade); } catch (_) { /* yok say */ } chart.removeSeries(series); series = null; }
+  if (series) { try { series.detachPrimitive(shade); } catch (_) { /* ignore */ } chart.removeSeries(series); series = null; }
   extLine = null;
   if (!state.bars.length) return;
   const type = effType();
@@ -346,7 +346,7 @@ function rebuildSeries() {
   updateExtLine();
 }
 
-// ------------------------------------------------------------------ çizim motoru
+// ------------------------------------------------------------------ drawing engine
 const engine = new DrawingEngine({
   chart,
   el: chartEl,
@@ -359,8 +359,8 @@ const engine = new DrawingEngine({
   askText: (title, v) => askText(title, v),
 });
 
-// çizim kaydı (sunucuya, data/drawings.json). Her sembolün sürüm numarası (rev) var:
-// eski bir sekme daha yeni kaydın üstüne yazamaz, sunucu 409 döner ve güncel hal yüklenir.
+// drawings are saved on the server (data/drawings.json). Each symbol has a revision number:
+// a stale tab cannot overwrite a newer save — the server answers 409 and the latest version is loaded.
 const drawCache = {};
 const drawRev = {};
 const drawFailed = {};
@@ -371,18 +371,18 @@ const drawChannel = 'BroadcastChannel' in window ? new BroadcastChannel('grafik-
 function setSaveState(kind, msg) {
   const el = $('#saveState');
   el.classList.toggle('err', kind === 'error');
-  el.textContent = kind === 'saving' ? 'Kaydediliyor…' : kind === 'saved' ? 'Kaydedildi ✓' : kind === 'error' ? `Kaydedilemedi: ${msg}` : '';
+  el.textContent = kind === 'saving' ? 'Saving…' : kind === 'saved' ? 'Saved ✓' : kind === 'error' ? `Not saved: ${msg}` : '';
   updateDrawCount();
 }
 function updateDrawCount() {
   const n = engine.count();
-  $('#drawCount').textContent = n ? `${n} çizim` : '';
+  $('#drawCount').textContent = n ? `${n} drawing${n === 1 ? '' : 's'}` : '';
 }
 
 function scheduleSave() {
   const k = symKey(state.symbol);
   updateUndo();
-  if (drawFailed[k]) { setSaveState('error', 'çizimler yüklenemediği için kaydedilmiyor — sayfayı yenile'); return; }
+  if (drawFailed[k]) { setSaveState('error', 'drawings could not be loaded, so nothing is saved — reload the page'); return; }
   drawCache[k] = engine.getDrawings();
   saveSym = k;
   setSaveState('saving');
@@ -403,7 +403,7 @@ async function flushSave() {
     if (!saveSym) setSaveState('saved');
   } catch (e) {
     if (e.status === 409 && e.data && Array.isArray(e.data.items)) {
-      // başka sekmede değişmiş: güncel hali al, ekrandakini onunla değiştir
+      // changed in another tab: take the latest version and show it
       drawCache[k] = e.data.items;
       drawRev[k] = e.data.rev;
       if (symKey(state.symbol) === k) engine.load(JSON.parse(JSON.stringify(e.data.items)));
@@ -423,7 +423,7 @@ if (drawChannel) {
 window.addEventListener('beforeunload', () => {
   if (saveSym) {
     fetch(`/api/drawings?symbol=${enc(saveSym)}`, {
-      method: 'POST', keepalive: true, headers: { 'X-Grafik': '1', 'Content-Type': 'application/json' },
+      method: 'POST', keepalive: true, headers: { 'X-Guraydingview': '1', 'Content-Type': 'application/json' },
       body: JSON.stringify({ items: drawCache[saveSym] || [], rev: drawRev[saveSym] ?? 0 }),
     });
   }
@@ -438,15 +438,67 @@ async function loadDrawings(sym) {
       drawRev[k] = r.rev ?? 0;
       delete drawFailed[k];
     } catch (_) {
-      drawFailed[k] = true; // boş listeyi kaydedip sunucudaki çizimleri silmeyelim
+      drawFailed[k] = true; // never save an empty list over the drawings on the server
       return [];
     }
   }
   return JSON.parse(JSON.stringify(drawCache[k]));
 }
 
-// ------------------------------------------------------------------ veri yükleme
+// ------------------------------------------------------------------ data loading
 let loadSeq = 0;
+
+// ---- remember each chart's view (zoom, scroll and manual price scale) per symbol + interval
+const views = store.get('views', {});
+let shownKey = null; // the symbol|interval currently on screen
+let viewTimer = null;
+let restoring = false;
+const viewKey = () => `${symKey(state.symbol)}|${state.interval}`;
+
+function saveView() {
+  clearTimeout(viewTimer);
+  if (!shownKey || !series || !state.bars.length || restoring) return;
+  const r = chart.timeScale().getVisibleLogicalRange();
+  if (!r) return;
+  const v = { from: engine.l2t(r.from), to: engine.l2t(r.to), at: Date.now() };
+  if (!chart.priceScale('right').options().autoScale) {
+    // price at the inner edges (inside the scale margins) so restoring lands on exactly the same range
+    const h = chartEl.clientHeight - chart.timeScale().height();
+    const hi = series.coordinateToPrice(h * 0.1), lo = series.coordinateToPrice(h * 0.92);
+    if (hi != null && lo != null && isFinite(hi) && isFinite(lo)) v.price = [lo, hi];
+  }
+  views[shownKey] = v;
+  const keys = Object.keys(views);
+  if (keys.length > 400) keys.sort((a, b) => views[a].at - views[b].at).slice(0, keys.length - 400).forEach((k) => delete views[k]);
+  store.set('views', views);
+}
+const scheduleViewSave = () => { clearTimeout(viewTimer); viewTimer = setTimeout(saveView, 400); };chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleViewSave);
+chartEl.addEventListener('wheel', scheduleViewSave, { passive: true });
+chartEl.addEventListener('mouseup', scheduleViewSave);
+window.addEventListener('beforeunload', saveView);
+
+function restoreView(key) {
+  const v = views[key];
+  if (!v || !series) return false;
+  restoring = true;
+  chart.timeScale().setVisibleLogicalRange({ from: engine.t2l(v.from), to: engine.t2l(v.to) });
+  const ps = chart.priceScale('right');
+  ps.applyOptions({ autoScale: true });
+  if (v.price) {
+    // no direct "set price range" in this chart version: autoscale to the saved range once, then freeze it
+    const [lo, hi] = v.price;
+    series.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: lo, maxValue: hi } }) });
+  }
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (v.price && series) {
+      ps.applyOptions({ autoScale: false });
+      series.applyOptions({ autoscaleInfoProvider: undefined });
+    }
+    restoring = false;
+    renderScaleBtns();
+  }));
+  return true;
+}
 
 function showOverlay(msg, isErr = false) {
   const o = $('#overlay');
@@ -461,14 +513,15 @@ async function loadChart({ keepView = false } = {}) {
   const symChanged = symKey(sym) !== engine._loadedSym;
   if (saveSym && symChanged) await flushSave();
 
-  // periyot değişince sağ kenardaki zamanı ve bar sayısını koru
+  // on interval change keep the right-edge time and the number of visible bars
   let view = null;
   if (keepView && series && state.bars.length) {
     const r = chart.timeScale().getVisibleLogicalRange();
     if (r) view = { right: engine.l2t(r.to), width: r.to - r.from };
   }
 
-  showOverlay('Yükleniyor…');
+  saveView(); // keep the view of the chart we are leaving
+  showOverlay('Loading…');
   renderHeader();
   let j, drawings;
   try {
@@ -480,12 +533,13 @@ async function loadChart({ keepView = false } = {}) {
     if (seq !== loadSeq) return;
     state.meta = null;
     state.bars = [];
+    shownKey = null;
     rebuildSeries();
     engine._loadedSym = null;
     engine.load([]);
-    state.missingCsv = /veri dosyası yok/.test(e.message) ? symKey(sym) : null;
+    state.missingCsv = /no data file/.test(e.message) ? symKey(sym) : null;
     showOverlay(`${sym}: ${e.message}`, true);
-    document.title = `${sym} — Grafik Masası`;
+    document.title = `${sym} — Guraydingview`;
     renderLegend();
     renderDetail();
     return;
@@ -511,15 +565,19 @@ async function loadChart({ keepView = false } = {}) {
   if (view) {
     const r = engine.t2l(view.right);
     ts.setVisibleLogicalRange({ from: r - view.width, to: r });
-  } else {
+  } else if (!restoreView(viewKey())) {
+    // first visit: latest bars, automatic price scale (don't carry another symbol's manual range)
+    chart.priceScale('right').applyOptions({ autoScale: true });
     const w = j.kind === 'line' ? Math.min(n, 400) : Math.min(n, 180);
     ts.setVisibleLogicalRange({ from: n - w, to: n - 1 + 12 });
+    renderScaleBtns();
   }
+  shownKey = viewKey();
   renderLegend();
   renderDetail();
   updateDrawCount();
   updateUndo();
-  document.title = `${sym} ${fmtPrice(last)} — Grafik Masası`;
+  document.title = `${sym} ${fmtPrice(last)} — Guraydingview`;
 }
 
 async function liveUpdate() {
@@ -540,8 +598,8 @@ async function liveUpdate() {
     }
     if (state.bars.length !== nBefore) shade.set(sessionFlags());
     if (!state.crosshair) renderLegend();
-    document.title = `${sym} ${fmtPrice(state.bars.at(-1).close)} — Grafik Masası`;
-  } catch (_) { /* geçici hata — bir sonraki turda tekrar dener */ }
+    document.title = `${sym} ${fmtPrice(state.bars.at(-1).close)} — Guraydingview`;
+  } catch (_) { /* temporary error — retried next round */ }
 }
 
 function openSymbol(sym) {
@@ -601,7 +659,7 @@ function renderDetail() {
     price = `<div class="d-price"><span class="d-last">${fmtNum(q.last, dec)}</span><span class="d-chg ${cls}">${sign(q.chg)}${fmtNum(Math.abs(q.chg), dec)} (${sign(q.chg)}${Math.abs(q.pct).toFixed(2)}%)</span></div>`;
     if (q.ext && state.ext) {
       const e = q.ext, ec = e.chg >= 0 ? 'up' : 'down';
-      price += `<div class="d-ext"><span class="ext-dot" style="background:${extColor(e.session)}"></span><span style="color:${extColor(e.session)}">${e.session === 'pre' ? 'Piyasa öncesi' : 'Piyasa sonrası'}</span>
+      price += `<div class="d-ext"><span class="ext-dot" style="background:${extColor(e.session)}"></span><span style="color:${extColor(e.session)}">${e.session === 'pre' ? 'Pre-market' : 'After hours'}</span>
         <b>${fmtNum(e.price, dec)}</b><span class="${ec}">${sign(e.chg)}${fmtNum(Math.abs(e.chg), dec)} (${sign(e.chg)}${Math.abs(e.pct).toFixed(2)}%)</span></div>`;
     }
   }
@@ -619,14 +677,14 @@ chart.subscribeCrosshairMove((param) => {
   renderLegend(i);
 });
 
-// ------------------------------------------------------------------ üst / alt çubuklar
+// ------------------------------------------------------------------ top / bottom bars
 function renderIntervals() {
   $('#ivBox').innerHTML = INTERVALS.map((i) => `<button class="tb-btn${i.id === state.interval ? ' active' : ''}" data-iv="${i.id}">${i.label}</button>`).join('');
 }
 $('#ivBox').addEventListener('click', (e) => { const b = e.target.closest('[data-iv]'); if (b) setInterval_(b.dataset.iv); });
 
 function renderTypes() {
-  const types = [['candles', 'Mum'], ['bars', 'Bar'], ['line', 'Çizgi']];
+  const types = [['candles', 'Candles'], ['bars', 'Bars'], ['line', 'Line']];
   $('#typeBox').innerHTML = types.map(([id, t]) => `<button class="tb-btn tb-icon${id === state.chartType ? ' active' : ''}" data-type="${id}" title="${t}">${svg(id)}</button>`).join('');
 }
 $('#typeBox').addEventListener('click', (e) => {
@@ -672,7 +730,7 @@ function setScaleMode(m) {
 $('#pctBtn').onclick = () => setScaleMode(2);
 $('#logBtn').onclick = () => setScaleMode(1);
 $('#autoBtn').onclick = () => { chart.priceScale('right').applyOptions({ autoScale: true }); renderScaleBtns(); };
-// piyasa öncesi/sonrası aç-kapa (TradingView "Uzatılmış seans")
+// pre-market / after hours on-off (TradingView "Extended trading hours")
 const renderExtBtn = () => $('#extBtn').classList.toggle('on', state.ext);
 $('#extBtn').onclick = () => {
   state.ext = !state.ext;
@@ -701,7 +759,7 @@ $('#redoBtn').onclick = () => { engine.redo(); updateUndo(); };
 $('#symBtn').onclick = () => openSearch('open');
 $('#helpBtn').onclick = () => openHelp();
 
-// ------------------------------------------------------------------ sol araç çubuğu
+// ------------------------------------------------------------------ left toolbar
 function renderTools() {
   $('#tools').innerHTML = TOOLBAR.map((t) => {
     if (t === '|') return '<div class="tool-sep"></div>';
@@ -724,13 +782,13 @@ $('#tools').addEventListener('click', (e) => {
   else if (id === 'hide') engine.setHidden(!engine.hidden);
   else if (id === 'trash') {
     const n = engine.count();
-    if (n && confirm(`${state.symbol} üzerindeki ${n} çizimin hepsi silinsin mi? (Ctrl+Z ile geri alınabilir)`)) engine.deleteAll();
+    if (n && confirm(`Remove all ${n} drawings on ${state.symbol}? (Ctrl+Z undoes this)`)) engine.deleteAll();
   } else engine.setTool(engine.tool === id && id !== 'cursor' ? 'cursor' : id);
   renderTools();
 });
 
-// ------------------------------------------------------------------ seçili çizim çubuğu
-// ---- renk seçici (TradingView paleti + opaklık + özel renk)
+// ------------------------------------------------------------------ selected drawing toolbar
+// ---- color picker (TradingView palette + opacity + custom color)
 function parseColor(s) {
   const m = String(s || '').match(/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?/i);
   if (m) {
@@ -750,8 +808,8 @@ function openColorPicker(anchor, { color, opacity = 1, showOpacity = true }, onP
   const pop = document.createElement('div');
   pop.className = 'cpop';
   pop.innerHTML = `<div class="cp-grid">${PALETTE_ROWS.map((row) => row.map((c) => `<button data-c="${c}" style="background:${c}" title="${c}"></button>`).join('')).join('')}</div>
-    ${showOpacity ? `<div class="cp-row"><span>Opaklık</span><input type="range" min="0" max="100" value="${Math.round(cur.a * 100)}" class="cp-op"><b class="cp-opv">${Math.round(cur.a * 100)}%</b></div>` : ''}
-    <div class="cp-row"><span>Özel renk</span><input type="color" class="cp-custom" value="${cur.hex}"></div>`;
+    ${showOpacity ? `<div class="cp-row"><span>Opacity</span><input type="range" min="0" max="100" value="${Math.round(cur.a * 100)}" class="cp-op"><b class="cp-opv">${Math.round(cur.a * 100)}%</b></div>` : ''}
+    <div class="cp-row"><span>Custom</span><input type="color" class="cp-custom" value="${cur.hex}"></div>`;
   document.body.appendChild(pop);
   const r = anchor.getBoundingClientRect();
   const pw = pop.offsetWidth, ph = pop.offsetHeight;
@@ -779,7 +837,7 @@ document.addEventListener('mousedown', (e) => {
   if (colorPop && !colorPop.contains(e.target) && !e.target.closest('[data-cp]')) closeColorPicker();
 }, true);
 
-// Seçili çizimin renk düğmelerinin hangi alanları değiştirdiği
+// which fields each color button of the selected drawing changes
 function colorTarget(d, which) {
   if (which === 'line') {
     return {
@@ -797,39 +855,39 @@ function colorTarget(d, which) {
   return { color: d.textColor || d.color, opacity: 1, showOpacity: false, apply: (c) => engine.updateSelected({ textColor: c }, 'tcolor') };
 }
 
-// ---- seçili çizimin üstündeki çubuk (TradingView'deki gibi)
+// ---- floating toolbar of the selected drawing (like TradingView)
 function renderDrawBar(d) {
   const bar = $('#drawBar');
   if (!d) { bar.hidden = true; closeColorPicker(); return; }
   const parts = [];
   const lineSw = d.type === 'fib' && !d.mono ? 'conic-gradient(#f23645,#ff9800,#4caf50,#089981,#00bcd4,#2962ff,#f23645)' : alpha(d.color, d.lineOpacity ?? 1);
   const und = (col, icon, act, title) => `<button class="db-btn db-col" data-act="${act}" data-cp title="${title}">${svg(icon, 22)}<i style="background:${col}"></i></button>`;
-  if (d.type !== 'text') parts.push(und(lineSw, 'edit', 'line', 'Çizgi rengi ve opaklığı'));
-  if (FILLABLE.has(d.type)) parts.push(und(alpha(d.fillColor || d.color, Math.max(0.35, d.fillOpacity ?? FILL_DEF[d.type] ?? 0.15)), 'fill', 'fill', 'Arka plan rengi ve sertliği'));
-  if (TEXTABLE.has(d.type)) parts.push(und(d.type === 'text' ? d.color : (d.textColor || d.color), 'textT', 'tcolor', 'Metin rengi'));
-  if (d.type === 'fib' && d.mono) parts.push(`<button class="db-btn" data-act="rainbow" title="Çok renkli seviyeler">${svg('rainbow', 22)}</button>`);
+  if (d.type !== 'text') parts.push(und(lineSw, 'edit', 'line', 'Line color and opacity'));
+  if (FILLABLE.has(d.type)) parts.push(und(alpha(d.fillColor || d.color, Math.max(0.35, d.fillOpacity ?? FILL_DEF[d.type] ?? 0.15)), 'fill', 'fill', 'Background color and opacity'));
+  if (TEXTABLE.has(d.type)) parts.push(und(d.type === 'text' ? d.color : (d.textColor || d.color), 'textT', 'tcolor', 'Text color'));
+  if (d.type === 'fib' && d.mono) parts.push(`<button class="db-btn" data-act="rainbow" title="Multi-color levels">${svg('rainbow', 22)}</button>`);
   if (d.type !== 'text') {
-    parts.push(`<button class="db-btn" data-act="width" title="Kalınlık"><svg viewBox="0 0 28 28"><path d="M4 14h20" stroke-width="${d.width || 1}"/></svg>${d.width || 1}px</button>`);
+    parts.push(`<button class="db-btn" data-act="width" title="Width"><svg viewBox="0 0 28 28"><path d="M4 14h20" stroke-width="${d.width || 1}"/></svg>${d.width || 1}px</button>`);
     const dash = ['', '4 3', '1.5 3'][d.style || 0];
-    parts.push(`<button class="db-btn" data-act="style" title="Çizgi stili"><svg viewBox="0 0 28 28"><path d="M3 14h22" stroke-width="2" stroke-dasharray="${dash}"/></svg></button>`);
+    parts.push(`<button class="db-btn" data-act="style" title="Line style"><svg viewBox="0 0 28 28"><path d="M3 14h22" stroke-width="2" stroke-dasharray="${dash}"/></svg></button>`);
   }
   if (d.type === 'text') {
-    parts.push('<button class="db-btn" data-act="smaller" title="Küçült">A−</button>');
+    parts.push('<button class="db-btn" data-act="smaller" title="Smaller">A−</button>');
     parts.push(`<span class="db-val">${d.textSize || d.size || 14}</span>`);
-    parts.push('<button class="db-btn" data-act="bigger" title="Büyüt">A+</button>');
+    parts.push('<button class="db-btn" data-act="bigger" title="Bigger">A+</button>');
   }
   if (d.type === 'line' || d.type === 'channel') {
     parts.push('<span class="db-sep"></span>');
-    parts.push(`<button class="db-btn${d.extL ? ' on' : ''}" data-act="extL" title="Sola uzat">${svg('extL', 22)}</button>`);
-    parts.push(`<button class="db-btn${d.extR ? ' on' : ''}" data-act="extR" title="Sağa uzat">${svg('extR', 22)}</button>`);
+    parts.push(`<button class="db-btn${d.extL ? ' on' : ''}" data-act="extL" title="Extend left">${svg('extL', 22)}</button>`);
+    parts.push(`<button class="db-btn${d.extR ? ' on' : ''}" data-act="extR" title="Extend right">${svg('extR', 22)}</button>`);
   }
-  if (d.type === 'fib') parts.push(`<button class="db-btn${d.extR ? ' on' : ''}" data-act="extR" title="Seviyeleri sağa uzat">${svg('extR', 22)}</button>`);
+  if (d.type === 'fib') parts.push(`<button class="db-btn${d.extR ? ' on' : ''}" data-act="extR" title="Extend levels right">${svg('extR', 22)}</button>`);
   parts.push('<span class="db-sep"></span>');
-  if (TEXTABLE.has(d.type)) parts.push(`<button class="db-btn" data-act="text" title="${d.type === 'text' ? 'Metni düzenle' : 'Çizime metin ekle / düzenle'}">${svg('textT', 22)}<span>${d.text && d.type !== 'text' ? '✓' : ''}</span></button>`);
-  parts.push(`<button class="db-btn" data-act="settings" title="Ayarlar (çift tık)">${svg('gear', 22)}</button>`);
-  parts.push(`<button class="db-btn${d.locked ? ' on' : ''}" data-act="lock" title="${d.locked ? 'Kilidi aç' : 'Kilitle (taşınmasın)'}">${svg(d.locked ? 'lock' : 'unlock', 22)}</button>`);
-  parts.push(`<button class="db-btn" data-act="clone" title="Kopyala (Ctrl+C / Ctrl+V)">${svg('clone', 22)}</button>`);
-  parts.push(`<button class="db-btn" data-act="delete" title="Sil (Del)">${svg('trash', 22)}</button>`);
+  if (TEXTABLE.has(d.type)) parts.push(`<button class="db-btn" data-act="text" title="${d.type === 'text' ? 'Edit text' : 'Add / edit text on the drawing'}">${svg('textT', 22)}<span>${d.text && d.type !== 'text' ? '✓' : ''}</span></button>`);
+  parts.push(`<button class="db-btn" data-act="settings" title="Settings (double-click)">${svg('gear', 22)}</button>`);
+  parts.push(`<button class="db-btn${d.locked ? ' on' : ''}" data-act="lock" title="${d.locked ? 'Unlock' : 'Lock (prevent moving)'}">${svg(d.locked ? 'lock' : 'unlock', 22)}</button>`);
+  parts.push(`<button class="db-btn" data-act="clone" title="Clone (Ctrl+C / Ctrl+V)">${svg('clone', 22)}</button>`);
+  parts.push(`<button class="db-btn" data-act="delete" title="Delete (Del)">${svg('trash', 22)}</button>`);
   bar.innerHTML = parts.join('');
   bar.hidden = false;
 }
@@ -859,7 +917,7 @@ $('#drawBar').addEventListener('click', (e) => {
   else if (act === 'settings') openDrawingSettings('style');
 });
 
-// ---- çizim ayarları penceresi (TradingView: Stil / Metin)
+// ---- drawing settings dialog (TradingView: Style / Text)
 const SIZES = [10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48];
 function openDrawingSettings(tab = 'style') {
   const d0 = engine.selected();
@@ -867,54 +925,54 @@ function openDrawingSettings(tab = 'style') {
   const original = JSON.parse(JSON.stringify(d0));
   const canText = TEXTABLE.has(d0.type), canFill = FILLABLE.has(d0.type);
   if (!canText) tab = 'style';
-  const NAMES = { line: 'Trend çizgisi', hline: 'Yatay çizgi', hray: 'Yatay ışın', vline: 'Dikey çizgi', channel: 'Paralel kanal', rect: 'Dikdörtgen', ellipse: 'Elips', fib: 'Fibonacci', daterange: 'Tarih aralığı', text: 'Metin' };
+  const NAMES = { line: 'Trend line', hline: 'Horizontal line', hray: 'Horizontal ray', vline: 'Vertical line', channel: 'Parallel channel', rect: 'Rectangle', ellipse: 'Ellipse', fib: 'Fibonacci', daterange: 'Date range', text: 'Text' };
   const opt = (v, cur, label = v) => `<option value="${v}"${String(v) === String(cur) ? ' selected' : ''}>${label}</option>`;
   const render = () => {
     const d = engine.selected();
     if (!d) { closeModal(null); return; }
     const sw = (key, col) => `<button class="set-sw" data-cp data-color="${key}"><i style="background:${col}"></i></button>`;
     const style = `
-      ${d.type !== 'text' ? `<div class="ds-row"><span>Çizgi</span>${sw('line', alpha(d.color, d.lineOpacity ?? 1))}
+      ${d.type !== 'text' ? `<div class="ds-row"><span>Line</span>${sw('line', alpha(d.color, d.lineOpacity ?? 1))}
         <select class="m-input sm" data-k="width">${[1, 2, 3, 4].map((w) => opt(w, d.width || 1, `${w}px`)).join('')}</select>
-        <select class="m-input sm" data-k="style">${opt(0, d.style || 0, 'Düz')}${opt(1, d.style || 0, 'Kesik')}${opt(2, d.style || 0, 'Noktalı')}</select></div>` : ''}
-      ${canFill ? `<div class="ds-row"><span>Arka plan</span>${sw('fill', alpha(d.fillColor || d.color, d.fillOpacity ?? FILL_DEF[d.type] ?? 0.15))}
+        <select class="m-input sm" data-k="style">${opt(0, d.style || 0, 'Solid')}${opt(1, d.style || 0, 'Dashed')}${opt(2, d.style || 0, 'Dotted')}</select></div>` : ''}
+      ${canFill ? `<div class="ds-row"><span>Background</span>${sw('fill', alpha(d.fillColor || d.color, d.fillOpacity ?? FILL_DEF[d.type] ?? 0.15))}
         <input type="range" min="0" max="100" data-k="fillOpacity" value="${Math.round((d.fillOpacity ?? FILL_DEF[d.type] ?? 0.15) * 100)}">
         <b class="ds-v">${Math.round((d.fillOpacity ?? FILL_DEF[d.type] ?? 0.15) * 100)}%</b></div>` : ''}
-      ${d.type !== 'text' ? `<div class="ds-row"><span>Çizgi opaklığı</span><input type="range" min="5" max="100" data-k="lineOpacity" value="${Math.round((d.lineOpacity ?? 1) * 100)}">
+      ${d.type !== 'text' ? `<div class="ds-row"><span>Line opacity</span><input type="range" min="5" max="100" data-k="lineOpacity" value="${Math.round((d.lineOpacity ?? 1) * 100)}">
         <b class="ds-v">${Math.round((d.lineOpacity ?? 1) * 100)}%</b></div>` : ''}
-      ${d.type === 'line' || d.type === 'channel' ? `<div class="ds-row"><span>Uzat</span>
-        <label class="ds-chk"><input type="checkbox" data-k="extL"${d.extL ? ' checked' : ''}> Sola</label>
-        <label class="ds-chk"><input type="checkbox" data-k="extR"${d.extR ? ' checked' : ''}> Sağa</label></div>` : ''}
-      ${d.type === 'fib' ? `<div class="ds-row"><span>Seviyeler</span>
-        <label class="ds-chk"><input type="checkbox" data-k="extR"${d.extR ? ' checked' : ''}> Sağa uzat</label>
-        <label class="ds-chk"><input type="checkbox" data-k="mono"${d.mono ? ' checked' : ''}> Tek renk</label></div>` : ''}
-      <div class="ds-row"><span>Kilit</span><label class="ds-chk"><input type="checkbox" data-k="locked"${d.locked ? ' checked' : ''}> Taşınmasın</label></div>`;
+      ${d.type === 'line' || d.type === 'channel' ? `<div class="ds-row"><span>Extend</span>
+        <label class="ds-chk"><input type="checkbox" data-k="extL"${d.extL ? ' checked' : ''}> Left</label>
+        <label class="ds-chk"><input type="checkbox" data-k="extR"${d.extR ? ' checked' : ''}> Right</label></div>` : ''}
+      ${d.type === 'fib' ? `<div class="ds-row"><span>Levels</span>
+        <label class="ds-chk"><input type="checkbox" data-k="extR"${d.extR ? ' checked' : ''}> Extend right</label>
+        <label class="ds-chk"><input type="checkbox" data-k="mono"${d.mono ? ' checked' : ''}> Single color</label></div>` : ''}
+      <div class="ds-row"><span>Lock</span><label class="ds-chk"><input type="checkbox" data-k="locked"${d.locked ? ' checked' : ''}> Prevent moving</label></div>`;
     const tcol = d.type === 'text' ? alpha(d.color, d.lineOpacity ?? 1) : (d.textColor || d.color);
     const isV = d.type === 'vline';
     const text = `
-      <textarea class="m-input ds-text" data-k="text" placeholder="Metin yaz…">${esc(d.text || '')}</textarea>
-      <div class="ds-row"><span>Yazı</span>${sw('tcolor', tcol)}
+      <textarea class="m-input ds-text" data-k="text" placeholder="Write text…">${esc(d.text || '')}</textarea>
+      <div class="ds-row"><span>Font</span>${sw('tcolor', tcol)}
         <select class="m-input sm" data-k="textSize">${SIZES.map((s) => opt(s, d.textSize || d.size || 14, `${s}`)).join('')}</select>
-        <button class="ds-tog${d.bold ? ' on' : ''}" data-tog="bold" title="Kalın"><b>B</b></button>
-        <button class="ds-tog${d.italic ? ' on' : ''}" data-tog="italic" title="İtalik"><i>I</i></button></div>
-      ${isV ? '' : `<div class="ds-row"><span>Yatay hiza</span><select class="m-input sm" data-k="textAlign">${opt('left', d.textAlign || (d.type === 'text' ? 'left' : 'center'), 'Sol')}${opt('center', d.textAlign || (d.type === 'text' ? 'left' : 'center'), 'Orta')}${opt('right', d.textAlign || (d.type === 'text' ? 'left' : 'center'), 'Sağ')}</select></div>`}
-      ${d.type === 'text' ? '' : `<div class="ds-row"><span>${isV ? 'Konum' : 'Dikey hiza'}</span><select class="m-input sm" data-k="textVAlign">${(() => {
+        <button class="ds-tog${d.bold ? ' on' : ''}" data-tog="bold" title="Bold"><b>B</b></button>
+        <button class="ds-tog${d.italic ? ' on' : ''}" data-tog="italic" title="Italic"><i>I</i></button></div>
+      ${isV ? '' : `<div class="ds-row"><span>Horizontal align</span><select class="m-input sm" data-k="textAlign">${opt('left', d.textAlign || (d.type === 'text' ? 'left' : 'center'), 'Left')}${opt('center', d.textAlign || (d.type === 'text' ? 'left' : 'center'), 'Center')}${opt('right', d.textAlign || (d.type === 'text' ? 'left' : 'center'), 'Right')}</select></div>`}
+      ${d.type === 'text' ? '' : `<div class="ds-row"><span>${isV ? 'Position' : 'Vertical align'}</span><select class="m-input sm" data-k="textVAlign">${(() => {
         const cur = d.textVAlign || (['rect', 'ellipse'].includes(d.type) ? 'middle' : 'top');
-        return opt('top', cur, isV ? 'Üstte' : 'Üst') + opt('middle', cur, 'Orta') + opt('bottom', cur, isV ? 'Altta' : 'Alt');
+        return opt('top', cur, 'Top') + opt('middle', cur, 'Middle') + opt('bottom', cur, 'Bottom');
       })()}</select></div>`}`;
     $('#modalBody').innerHTML = `
-      <div class="s-tabs ds-tabs"><button class="s-tab${tab === 'style' ? ' on' : ''}" data-tab="style">Stil</button>${canText ? `<button class="s-tab${tab === 'text' ? ' on' : ''}" data-tab="text">Metin</button>` : ''}</div>
+      <div class="s-tabs ds-tabs"><button class="s-tab${tab === 'style' ? ' on' : ''}" data-tab="style">Style</button>${canText ? `<button class="s-tab${tab === 'text' ? ' on' : ''}" data-tab="text">Text</button>` : ''}</div>
       <div class="ds-body">${tab === 'style' ? style : text}</div>
-      <div class="m-actions"><button class="m-btn" id="dsCancel">İptal</button><button class="m-btn primary" id="dsOk">Tamam</button></div>`;
+      <div class="m-actions"><button class="m-btn" id="dsCancel">Cancel</button><button class="m-btn primary" id="dsOk">OK</button></div>`;
     if (tab === 'text') { const ta = $('#modalBody .ds-text'); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
   };
-  openModal(NAMES[d0.type] || 'Çizim', '');
+  openModal(NAMES[d0.type] || 'Drawing', '');
   $('#modal').classList.add('light');
   const body = $('#modalBody');
   modalClose = () => {
     $('#modal').classList.remove('light');
     closeColorPicker();
-    body.onclick = body.oninput = body.onchange = null; // sonraki pencerelere sızmasın
+    body.onclick = body.oninput = body.onchange = null; // don't leak into the next dialog
   };
   render();
   const set = (patch, key) => engine.updateSelected(patch, 'dlg-' + key);
@@ -982,17 +1040,17 @@ function renderWatchlist() {
   const html = [];
   wl.groups.forEach((g, gi) => {
     if (g.name) {
-      html.push(`<div class="wl-group${g.collapsed ? ' collapsed' : ''}" data-gi="${gi}" title="Çift tık: yeniden adlandır">
+      html.push(`<div class="wl-group${g.collapsed ? ' collapsed' : ''}" data-gi="${gi}" title="Double-click: rename">
         <svg viewBox="0 0 18 18" width="12" height="12"><path d="M5 7l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>${esc(g.name)}
-        <button class="wl-x" data-delgroup="${gi}" title="Bölümü sil">×</button></div>`);
+        <button class="wl-x" data-delgroup="${gi}" title="Delete section">×</button></div>`);
     }
     if (g.collapsed) return;
     g.symbols.forEach((s, si) => {
       const q = state.quotes[s];
       const title = q?.error ? q.error : (q?.name || s);
       html.push(`<div class="wl-row${symKey(s) === cur ? ' active' : ''}${q?.error ? ' err' : ''}" draggable="true" data-gi="${gi}" data-si="${si}" data-sym="${esc(s)}" title="${esc(title)}">
-        <span class="wl-sym">${iconFor(s)}<b>${esc(s)}</b>${q?.ext && state.ext ? `<span class="ext-dot" style="background:${extColor(q.ext.session)}" title="${q.ext.session === 'pre' ? 'Piyasa öncesi' : 'Piyasa sonrası'}: ${fmtNum(q.ext.price, decimalsFor(q.ext.price))} (${sign(q.ext.chg)}${Math.abs(q.ext.pct).toFixed(2)}%)"></span>` : ''}</span>${quoteCells(s)}
-        <button class="wl-x" data-del="${gi}:${si}" title="Listeden çıkar">×</button></div>`);
+        <span class="wl-sym">${iconFor(s)}<b>${esc(s)}</b>${q?.ext && state.ext ? `<span class="ext-dot" style="background:${extColor(q.ext.session)}" title="${q.ext.session === 'pre' ? 'Pre-market' : 'After hours'}: ${fmtNum(q.ext.price, decimalsFor(q.ext.price))} (${sign(q.ext.chg)}${Math.abs(q.ext.pct).toFixed(2)}%)"></span>` : ''}</span>${quoteCells(s)}
+        <button class="wl-x" data-del="${gi}:${si}" title="Remove from list">×</button></div>`);
     });
   });
   $('#wlBody').innerHTML = html.join('');
@@ -1033,7 +1091,7 @@ $('#wlBody').addEventListener('click', (e) => {
   if (dg) {
     e.stopPropagation();
     const gi = Number(dg.dataset.delgroup), g = wl.groups[gi];
-    if (g.symbols.length && !confirm(`"${g.name}" bölümü ve içindeki ${g.symbols.length} sembol silinsin mi?`)) return;
+    if (g.symbols.length && !confirm(`Delete section "${g.name}" and its ${g.symbols.length} symbols?`)) return;
     wl.groups.splice(gi, 1);
     if (!wl.groups.length) wl.groups.push({ name: '', symbols: [] });
     saveWatchlist();
@@ -1056,11 +1114,11 @@ $('#wlBody').addEventListener('dblclick', async (e) => {
   const grp = e.target.closest('.wl-group');
   if (!grp) return;
   const g = wl.groups[Number(grp.dataset.gi)];
-  const name = await askText('Bölüm adı', g.name, false);
+  const name = await askText('Section name', g.name, false);
   if (name != null && name.trim()) { g.name = name.trim().toUpperCase(); saveWatchlist(); renderWatchlist(); }
 });
 
-// sürükle-bırak ile sıralama
+// drag & drop reordering
 let dragSrc = null;
 $('#wlBody').addEventListener('dragstart', (e) => {
   const row = e.target.closest('.wl-row');
@@ -1085,7 +1143,7 @@ $('#wlBody').addEventListener('drop', (e) => {
   const sym = wl.groups[dragSrc.gi].symbols[dragSrc.si];
   let gi = Number(t.dataset.gi), si;
   if (t.classList.contains('wl-group')) {
-    // bölüm başlığına bırakılırsa: bir önceki bölümün sonuna (başlığın hemen üstü)
+    // dropped on a section header: append to the previous section (just above the header)
     if (gi > 0) { gi -= 1; si = wl.groups[gi].symbols.length; } else si = 0;
   } else si = Number(t.dataset.si);
   wl.groups[dragSrc.gi].symbols.splice(dragSrc.si, 1);
@@ -1130,7 +1188,7 @@ $('#wlMenu').addEventListener('click', async (e) => {
   if (b.dataset.act === 'refresh') refreshQuotes();
   if (b.dataset.act === 'csv') $('#csvFile').click();
   if (b.dataset.act === 'group') {
-    const name = await askText('Yeni bölüm adı', '', false);
+    const name = await askText('New section name', '', false);
     if (name && name.trim()) { wl.groups.push({ name: name.trim().toUpperCase(), symbols: [] }); saveWatchlist(); renderWatchlist(); }
   }
 });
@@ -1160,8 +1218,8 @@ function askText(title, value = '', multiline = true) {
     const field = multiline
       ? `<textarea class="m-input" id="askInput">${esc(value)}</textarea>`
       : `<input class="m-input" id="askInput" value="${esc(value)}">`;
-    openModal(title, `${field}<div class="m-hint">${multiline ? 'Enter: tamam · Shift+Enter: yeni satır · Esc: vazgeç' : 'Enter: tamam · Esc: vazgeç'}</div>
-      <div class="m-actions"><button class="m-btn" data-close>Vazgeç</button><button class="m-btn primary" id="askOk">Tamam</button></div>`);
+    openModal(title, `${field}<div class="m-hint">${multiline ? 'Enter: OK · Shift+Enter: new line · Esc: cancel' : 'Enter: OK · Esc: cancel'}</div>
+      <div class="m-actions"><button class="m-btn" data-close>Cancel</button><button class="m-btn primary" id="askOk">OK</button></div>`);
     modalClose = resolve;
     const inp = $('#askInput');
     inp.focus();
@@ -1174,15 +1232,15 @@ function askText(title, value = '', multiline = true) {
   });
 }
 
-const SEARCH_TABS = [['all', 'Tümü'], ['stock', 'Hisse'], ['fund', 'Fon'], ['futures', 'Vadeli'], ['forex', 'Forex'],
-  ['crypto', 'Kripto'], ['index', 'Endeks'], ['economy', 'Ekonomi']];
+const SEARCH_TABS = [['all', 'All'], ['stock', 'Stocks'], ['fund', 'Funds'], ['futures', 'Futures'], ['forex', 'Forex'],
+  ['crypto', 'Crypto'], ['index', 'Indices'], ['economy', 'Economy']];
 
 function openSearch(mode, initial = '') {
-  openModal(mode === 'add' ? 'Watchlist\'e sembol ekle' : 'Sembol ara', `
-    <input class="m-input" id="sInput" placeholder="Sembol veya isim (ör. AAPL, THYAO, ETH, altın)" autocomplete="off" spellcheck="false">
+  openModal(mode === 'add' ? 'Add symbol to watchlist' : 'Symbol search', `
+    <input class="m-input" id="sInput" placeholder="Symbol or name (e.g. AAPL, THYAO, ETH, gold)" autocomplete="off" spellcheck="false">
     <div class="s-tabs" id="sTabs">${SEARCH_TABS.map(([id, l]) => `<button class="s-tab" data-cat="${id}">${l}</button>`).join('')}</div>
     <div class="m-results" id="sResults"></div>
-    <div class="m-hint">Enter: yazdığını aç · Oran için <code>GOLD/SILVER</code> · Kaynak öneki: <code>FRED:UNRATE</code> <code>EVDS:TP.DK.USD.A.YTL</code> <code>BIST:THYAO</code></div>`);
+    <div class="m-hint">Enter: open what you typed · Ratio: <code>GOLD/SILVER</code> · Source prefix: <code>FRED:UNRATE</code> <code>EVDS:TP.DK.USD.A.YTL</code> <code>BIST:THYAO</code></div>`);
   const inp = $('#sInput');
   inp.value = initial;
   inp.focus();
@@ -1194,14 +1252,14 @@ function openSearch(mode, initial = '') {
   const render = () => {
     const have = inList();
     const note = (t) => { $('#sResults').innerHTML = `<div class="m-hint" style="padding:10px 18px">${t}</div>`; };
-    if (loading && !results.length) { note('Sembol kütüphanesi yükleniyor… (ilk açılışta birkaç saniye sürer)'); return; }
-    if (errMsg) { note(`<span style="color:var(--down)">Arama yapılamadı: ${esc(errMsg)}</span>`); return; }
-    if (!results.length) { note(inp.value.trim() ? 'Sonuç yok — Enter ile yazdığını yine de açabilirsin.' : 'Bu kategoride öne çıkan yok — aramak için yaz.'); return; }
+    if (loading && !results.length) { note('Loading the symbol library… (takes a few seconds the first time)'); return; }
+    if (errMsg) { note(`<span style="color:var(--down)">Search failed: ${esc(errMsg)}</span>`); return; }
+    if (!results.length) { note(inp.value.trim() ? 'No results — press Enter to open what you typed anyway.' : 'Nothing featured in this category — type to search.'); return; }
     $('#sResults').innerHTML = results.map((r, i) => {
       const added = have.has(symKey(r.symbol));
       return `<div class="m-res${i === sel ? ' sel' : ''}" data-i="${i}">${iconFor(r.symbol)}<b>${esc(r.symbol)}</b><span title="${esc(r.name)}">${esc(r.name)}</span>
         <i>${esc([r.type, r.exch].filter(Boolean).join(' · '))}</i>
-        <button class="s-add${added ? ' on' : ''}" data-add="${i}" title="${added ? 'Watchlist\'te' : 'Watchlist\'e ekle'}">${added ? '✓' : '+'}</button></div>`;
+        <button class="s-add${added ? ' on' : ''}" data-add="${i}" title="${added ? 'In watchlist' : 'Add to watchlist'}">${added ? '✓' : '+'}</button></div>`;
     }).join('');
     const s = $('#sResults .m-res.sel');
     if (s) s.scrollIntoView({ block: 'nearest' });
@@ -1218,7 +1276,7 @@ function openSearch(mode, initial = '') {
       results = Array.isArray(r) ? r : [];
       sel = q && results.length ? 0 : -1;
     } catch (e) {
-      if (my === seq) { results = []; errMsg = e.message || 'bağlantı hatası'; }
+      if (my === seq) { results = []; errMsg = e.message || 'connection error'; }
     }
     if (my === seq) { loading = false; render(); }
   };
@@ -1256,24 +1314,24 @@ function openSearch(mode, initial = '') {
 
 function openHelp() {
   const keys = [
-    ['Harf yaz', 'Sembol ara'], ['↑ / ↓', 'Watchlist\'te önceki / sonraki sembol'],
-    ['Alt+T', 'Trend çizgisi'], ['Alt+H', 'İmleçteki fiyata yatay çizgi'], ['Alt+J', 'Yatay ışın aracı'],
-    ['Alt+V', 'İmleçteki zamana dikey çizgi'], ['Alt+F', 'Fibonacci'], ['Alt+C', 'Paralel kanal'], ['Alt+R', 'Dikdörtgen'],
-    ['Shift + sürükle', 'Hızlı ölçüm'], ['Del', 'Seçili çizimi sil'], ['Ctrl+Z / Ctrl+Y', 'Geri al / yinele'],
-    ['Ctrl+C / Ctrl+V', 'Çizimi kopyala / yapıştır (başka sembole de)'], ['Esc', 'Çizimi iptal et / seçimi kaldır'],
-    ['Çift tık (metin)', 'Metni düzenle'], ['Fiyat eksenini sürükle', 'Dikey ölçek'], ['Eksen çift tık', 'Ölçeği sıfırla'],
+    ['Type a letter', 'Symbol search'], ['↑ / ↓', 'Previous / next symbol in the watchlist'],
+    ['Alt+T', 'Trend line'], ['Alt+H', 'Horizontal line at the cursor price'], ['Alt+J', 'Horizontal ray tool'],
+    ['Alt+V', 'Vertical line at the cursor time'], ['Alt+F', 'Fibonacci'], ['Alt+C', 'Parallel channel'], ['Alt+R', 'Rectangle'], ['Alt+E', 'Ellipse'],
+    ['Shift + drag', 'Quick measure'], ['Del', 'Delete the selected drawing'], ['Ctrl+Z / Ctrl+Y', 'Undo / redo'],
+    ['Ctrl+C / Ctrl+V', 'Copy / paste a drawing (also onto another symbol)'], ['Esc', 'Cancel drawing / deselect'],
+    ['Double-click a drawing', 'Drawing settings'], ['Drag the price axis', 'Vertical scale'], ['Double-click an axis', 'Reset the scale'],
   ];
-  openModal('Kısayollar', `<div class="m-keys">${keys.map(([k, v]) => `<kbd>${k}</kbd><span>${v}</span>`).join('')}</div>
-    <div class="m-hint" style="margin-top:14px">Çizimler her sembol için ayrı kaydedilir ve periyot değişince yerinde kalır. Kayıt dosyası: <code>data/drawings.json</code></div>`);
+  openModal('Shortcuts', `<div class="m-keys">${keys.map(([k, v]) => `<kbd>${k}</kbd><span>${v}</span>`).join('')}</div>
+    <div class="m-hint" style="margin-top:14px">Drawings are saved per symbol and stay in place when you change the interval. Each chart also remembers its zoom and scroll. Saved in: <code>data/drawings.json</code></div>`);
 }
 
 // ------------------------------------------------------------------ ayarlar (TCMB EVDS)
-const MULTS = [[1, '×1 (ham değer)'], [1000, '×1000 (Bin TL)'], [1e6, '×1.000.000 (Milyon TL)']];
+const MULTS = [[1, '×1 (raw value)'], [1000, '×1000 (thousand TL)'], [1e6, '×1,000,000 (million TL)']];
 const fmtDate = (t) => { const d = new Date(t * 1000); return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
-const keyPlaceholder = (c) => (c.evds_key_set ? `Kayıtlı (${c.evds_key_hint}) — değiştirmek için yenisini yapıştır` : 'EVDS API anahtarını buraya yapıştır');
+const keyPlaceholder = (c) => (c.evds_key_set ? `Saved (${c.evds_key_hint}) — paste a new key to replace it` : 'Paste your EVDS API key here');
 
-// ---- Ayarlar penceresi sekmeleri: Grafik stili | TCMB EVDS
-const settingsTabs = (cur) => `<div class="s-tabs set-tabs"><button class="s-tab${cur === 'chart' ? ' on' : ''}" data-stab="chart">Grafik stili</button><button class="s-tab${cur === 'evds' ? ' on' : ''}" data-stab="evds">TCMB EVDS</button></div>`;
+// ---- Settings dialog tabs: Chart style | TCMB EVDS
+const settingsTabs = (cur) => `<div class="s-tabs set-tabs"><button class="s-tab${cur === 'chart' ? ' on' : ''}" data-stab="chart">Chart style</button><button class="s-tab${cur === 'evds' ? ' on' : ''}" data-stab="evds">TCMB EVDS</button></div>`;
 function wireSettingsTabs() {
   $('#modalBody .set-tabs').onclick = (e) => {
     const b = e.target.closest('[data-stab]');
@@ -1289,29 +1347,29 @@ function openChartSettings() {
   const chk = (key, label) => `<label class="ds-chk"><input type="checkbox" data-csk="${key}"${CS[key] ? ' checked' : ''}> ${label}</label>`;
   const render = () => {
     $('#modalBody').innerHTML = `${settingsTabs('chart')}
-      <div class="set-group">Çizgi grafik (tek çizgili veriler: ISM, M2, Fed…)</div>
-      ${row('Çizgi', `${sw('lineColor')}<select class="m-input sm" data-csn="lineWidth">${[1, 2, 3, 4].map((w) => `<option value="${w}"${CS.lineWidth === w ? ' selected' : ''}>${w}px</option>`).join('')}</select>`)}
-      <div class="set-group">Mumlar ve barlar</div>
-      ${row('Yükseliş', sw('up'))}
-      ${row('Düşüş', sw('down'))}
-      ${row('Görünüm', `${chk('wick', 'Fitil')} ${chk('border', 'Kenarlık')}`)}
-      <div class="set-group">Son fiyat çizgisi (yatay)</div>
-      ${row('Göster', `${chk('priceLine', 'Açık')} ${sw('priceLineColor')}<button class="m-btn sm" data-csauto="priceLineColor" title="Mum/çizgi rengini kullan">Otomatik</button>
-        <select class="m-input sm" data-csn="priceLineStyle">${[[0, 'Düz'], [2, 'Kesik'], [1, 'Noktalı']].map(([v, l]) => `<option value="${v}"${CS.priceLineStyle === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`)}
-      <div class="set-group">Arka plan</div>
-      ${row('Arka plan', sw('bg'))}
-      ${row('Izgara', `${chk('grid', 'Açık')} ${sw('gridColor')}`)}
-      ${row('Ölçek yazısı', sw('text'))}
-      <div class="set-group">Piyasa öncesi / sonrası (ABD hisse ve ETF'leri)</div>
-      ${row('Öncesi rengi', `${sw('extPreColor')}<span class="muted" style="font-size:12px">nokta, fiyat, çizgi</span>`)}
-      ${row('Sonrası rengi', `${sw('extPostColor')}<span class="muted" style="font-size:12px">nokta, fiyat, çizgi</span>`)}
-      ${row('Fiyat çizgisi', `${chk('extLine', 'Günlük grafikte göster')}
-        <select class="m-input sm" data-csn="extLineStyle">${[[0, 'Düz'], [2, 'Kesik'], [1, 'Noktalı']].map(([v, l]) => `<option value="${v}"${CS.extLineStyle === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`)}
-      ${row('Arka plan', `${sw('preBg')}<span class="muted" style="font-size:12px">öncesi</span> ${sw('postBg')}<span class="muted" style="font-size:12px">sonrası (gün içi grafik)</span>`)}
-      <div class="m-actions"><button class="m-btn" id="csReset" style="margin-right:auto">Varsayılana dön</button><button class="m-btn primary" data-close>Tamam</button></div>`;
+      <div class="set-group">Line chart (single-line data: ISM, M2, Fed…)</div>
+      ${row('Line', `${sw('lineColor')}<select class="m-input sm" data-csn="lineWidth">${[1, 2, 3, 4].map((w) => `<option value="${w}"${CS.lineWidth === w ? ' selected' : ''}>${w}px</option>`).join('')}</select>`)}
+      <div class="set-group">Candles and bars</div>
+      ${row('Up', sw('up'))}
+      ${row('Down', sw('down'))}
+      ${row('Show', `${chk('wick', 'Wicks')} ${chk('border', 'Borders')}`)}
+      <div class="set-group">Last price line</div>
+      ${row('Show', `${chk('priceLine', 'On')} ${sw('priceLineColor')}<button class="m-btn sm" data-csauto="priceLineColor" title="Use the candle / line color">Auto</button>
+        <select class="m-input sm" data-csn="priceLineStyle">${[[0, 'Solid'], [2, 'Dashed'], [1, 'Dotted']].map(([v, l]) => `<option value="${v}"${CS.priceLineStyle === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`)}
+      <div class="set-group">Background</div>
+      ${row('Background', sw('bg'))}
+      ${row('Grid', `${chk('grid', 'On')} ${sw('gridColor')}`)}
+      ${row('Scale text', sw('text'))}
+      <div class="set-group">Pre-market / after hours (US stocks and ETFs)</div>
+      ${row('Pre-market', `${sw('extPreColor')}<span class="muted" style="font-size:12px">dot, price, line</span>`)}
+      ${row('After hours', `${sw('extPostColor')}<span class="muted" style="font-size:12px">dot, price, line</span>`)}
+      ${row('Price line', `${chk('extLine', 'Show on daily charts')}
+        <select class="m-input sm" data-csn="extLineStyle">${[[0, 'Solid'], [2, 'Dashed'], [1, 'Dotted']].map(([v, l]) => `<option value="${v}"${CS.extLineStyle === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`)}
+      ${row('Background', `${sw('preBg')}<span class="muted" style="font-size:12px">pre-market</span> ${sw('postBg')}<span class="muted" style="font-size:12px">after hours (intraday charts)</span>`)}
+      <div class="m-actions"><button class="m-btn" id="csReset" style="margin-right:auto">Reset to defaults</button><button class="m-btn primary" data-close>OK</button></div>`;
     wireSettingsTabs();
   };
-  openModal('Ayarlar', '');
+  openModal('Settings', '');
   $('#modal').classList.add('light');
   const body = $('#modalBody');
   modalClose = () => { $('#modal').classList.remove('light'); closeColorPicker(); body.onclick = body.oninput = null; };
@@ -1351,21 +1409,21 @@ async function openSettings() {
   const rows = aliases.map((a) => {
     const s = cfg.evds_series[a];
     const opts = MULTS.map(([v, l]) => `<option value="${v}"${Number(s.mult) === v ? ' selected' : ''}>${l}</option>`).join('');
-    return `<b>${esc(a)}</b><input class="m-input sm" data-code="${esc(a)}" value="${esc(s.code)}" placeholder="ör. TP.HPBITABLO1.11" spellcheck="false">
+    return `<b>${esc(a)}</b><input class="m-input sm" data-code="${esc(a)}" value="${esc(s.code)}" placeholder="e.g. TP.HPBITABLO1.11" spellcheck="false">
       <select class="m-input sm" data-mult="${esc(a)}">${opts}</select>`;
   }).join('');
-  openModal('Ayarlar', `${settingsTabs('evds')}
-    <div class="set-title">TCMB EVDS — ${esc(aliases.join(', '))} ve diğer TCMB serileri</div>
-    <label class="set-label" for="evKey">API anahtarı</label>
+  openModal('Settings', `${settingsTabs('evds')}
+    <div class="set-title">TCMB EVDS — ${esc(aliases.join(', '))} and other Turkish central bank series</div>
+    <label class="set-label" for="evKey">API key</label>
     <input class="m-input" id="evKey" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(keyPlaceholder(cfg))}">
-    <div class="m-hint">Anahtar ücretsiz: <a href="https://evds3.tcmb.gov.tr" target="_blank" rel="noopener">evds3.tcmb.gov.tr</a> → giriş yap / üye ol → kullanıcı adın → Profil → API Anahtarı.
-      Anahtar yalnızca bu bilgisayarda (<code>data/config.json</code>) durur ve sadece TCMB'ye gönderilir.</div>
-    <div class="set-grid"><span>Sembol</span><span>EVDS seri kodu</span><span>Birim çarpanı</span>${rows}</div>
-    <div class="m-hint">Başka bir TCMB serisi için sembol aramaya <code>EVDS:SERİ.KODU</code> yaz (ör. <code>EVDS:TP.DK.USD.A.YTL</code>).</div>
+    <div class="m-hint">The key is free: <a href="https://evds3.tcmb.gov.tr" target="_blank" rel="noopener">evds3.tcmb.gov.tr</a> → sign in / sign up → your user name → Profile → API Key.
+      The key stays on this computer (<code>data/config.json</code>) and is only sent to TCMB.</div>
+    <div class="set-grid"><span>Symbol</span><span>EVDS series code</span><span>Unit multiplier</span>${rows}</div>
+    <div class="m-hint">For any other TCMB series, type <code>EVDS:SERIES.CODE</code> in symbol search (e.g. <code>EVDS:TP.DK.USD.A.YTL</code>).</div>
     <div class="m-actions">
-      ${cfg.evds_key_set ? '<button class="m-btn" id="evDel" style="margin-right:auto">Anahtarı sil</button>' : ''}
-      <button class="m-btn" id="evFind">M1/M2 kodlarını EVDS'den bul</button>
-      <button class="m-btn primary" id="evSave">Kaydet ve test et</button>
+      ${cfg.evds_key_set ? '<button class="m-btn" id="evDel" style="margin-right:auto">Delete key</button>' : ''}
+      <button class="m-btn" id="evFind">Find M1/M2 codes on EVDS</button>
+      <button class="m-btn primary" id="evSave">Save and test</button>
     </div>
     <div id="evOut" class="set-out"></div>`);
 
@@ -1392,7 +1450,7 @@ async function openSettings() {
   };
 
   $('#evSave').onclick = async () => {
-    out.innerHTML = '<span class="muted">Kaydediliyor, EVDS\'ye soruluyor…</span>';
+    out.innerHTML = '<span class="muted">Saving, asking EVDS…</span>';
     try {
       await save();
       const t = await api('/api/evds/test');
@@ -1401,15 +1459,15 @@ async function openSettings() {
         out.innerHTML = t.results.map((r) => (r.error
           ? `<div class="set-row"><b>${esc(r.alias)}</b> <code>${esc(r.code || '—')}</code> · <span class="bad">${esc(r.error)}</span></div>`
           : `<div class="set-row"><b>${esc(r.alias)}</b> <code>${esc(r.code)}</code> <span class="ok">✓</span> ${esc(r.name || '')}<br>
-              <span class="muted">Son değer:</span> ${fmtNum(r.last, 2)} <span class="muted">· ${fmtDate(r.t)} · ${r.count} veri · EVDS ham değeri ${nfmt(r.raw, 2)}</span></div>`)).join('')
-          + '<div class="m-hint">TradingView\'deki değerle karşılaştır (TRM1 ≈ 11.22T, TRM2 ≈ 30.01T). Tutmuyorsa kodu ya da çarpanı değiştirip tekrar test et.</div>';
+              <span class="muted">Last value:</span> ${fmtNum(r.last, 2)} <span class="muted">· ${fmtDate(r.t)} · ${r.count} points · raw EVDS value ${nfmt(r.raw, 2)}</span></div>`)).join('')
+          + '<div class="m-hint">Compare with TradingView (TRM1 ≈ 11.22T, TRM2 ≈ 30.01T). If it does not match, change the code or multiplier and test again.</div>';
       }
     } catch (e) { out.innerHTML = `<div class="bad">${esc(e.message)}</div>`; }
     afterChange();
   };
 
   $('#evFind').onclick = async () => {
-    out.innerHTML = '<span class="muted">EVDS\'de para arzı serileri aranıyor…</span>';
+    out.innerHTML = '<span class="muted">Searching EVDS for money supply series…</span>';
     try {
       await save();
       const seed = $('[data-code="TRM2"]')?.value.trim() || '';
@@ -1422,8 +1480,8 @@ async function openSettings() {
       for (const [a, code] of Object.entries(picked)) $(`[data-code="${a}"]`).value = code;
       const btns = (code) => aliases.map((a) => `<button data-assign="${esc(a)}" data-c="${esc(code)}">${esc(a)}</button>`).join('');
       out.innerHTML = (Object.keys(picked).length
-        ? `<div class="ok">Bulundu ve dolduruldu: ${Object.entries(picked).map(([a, c]) => `${esc(a)} = <code>${esc(c)}</code>`).join(', ')}. Şimdi “Kaydet ve test et”e bas.</div>`
-        : '<div class="muted">M1/M2 adlı seriyi otomatik seçemedim; listeden kendin seç.</div>')
+        ? `<div class="ok">Found and filled in: ${Object.entries(picked).map(([a, c]) => `${esc(a)} = <code>${esc(c)}</code>`).join(', ')}. Now press “Save and test”.</div>`
+        : '<div class="muted">Could not pick the M1/M2 series automatically; choose from the list.</div>')
         + r.groups.map((g) => `<div class="set-group">${esc(g.name)} · <code>${esc(g.code)}</code></div>`
           + g.series.slice(0, 80).map((s) => `<div class="set-ser${Object.values(picked).includes(s.code) ? ' hit' : ''}"><code>${esc(s.code)}</code>
               <span title="${esc(s.name)}">${esc(s.name)} <i class="muted">${esc(s.freq)}</i></span><span>${btns(s.code)}</span></div>`).join('')).join('');
@@ -1440,24 +1498,24 @@ async function openSettings() {
   const del = $('#evDel');
   if (del) {
     del.onclick = async () => {
-      if (!confirm('EVDS anahtarı silinsin mi?')) return;
-      try { await save({ evds_key: '' }); out.innerHTML = '<div class="muted">Anahtar silindi.</div>'; del.remove(); } catch (e) { out.innerHTML = `<div class="bad">${esc(e.message)}</div>`; }
+      if (!confirm('Delete the EVDS API key?')) return;
+      try { await save({ evds_key: '' }); out.innerHTML = '<div class="muted">Key deleted.</div>'; del.remove(); } catch (e) { out.innerHTML = `<div class="bad">${esc(e.message)}</div>`; }
       afterChange();
     };
   }
 }
 $('#settingsBtn').onclick = () => openChartSettings();
 
-// ------------------------------------------------------------------ CSV içe aktarma (sürükle-bırak ya da ⋯ menüsü)
+// ------------------------------------------------------------------ CSV import (drag & drop or the ⋯ menu)
 async function importCsvFile(file) {
   if (!file) return;
   const stem = file.name.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_.-]+/g, '_').toUpperCase();
   const guess = state.missingCsv || stem;
-  const name = await askText(`"${file.name}" hangi sembol adıyla kaydedilsin?`, guess, false);
+  const name = await askText(`Save "${file.name}" as which symbol?`, guess, false);
   if (!name || !name.trim()) return;
   try {
     const r = await fetch(`/api/csv?symbol=${enc(name.trim())}`, {
-      method: 'POST', headers: { 'X-Grafik': '1', 'Content-Type': 'text/csv' }, body: await file.text(),
+      method: 'POST', headers: { 'X-Guraydingview': '1', 'Content-Type': 'text/csv' }, body: await file.text(),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -1466,7 +1524,7 @@ async function importCsvFile(file) {
     addToWatchlist(j.symbol);
     openSymbol(j.symbol);
   } catch (e) {
-    showOverlay(`CSV yüklenemedi: ${e.message}`, true);
+    showOverlay(`CSV import failed: ${e.message}`, true);
   }
 }
 $('#csvFile').addEventListener('change', (e) => { importCsvFile(e.target.files[0]); e.target.value = ''; });
@@ -1508,7 +1566,7 @@ document.addEventListener('keydown', (e) => {
   if (!mod && !e.altKey && k.length === 1 && /[a-z0-9]/i.test(k)) { e.preventDefault(); openSearch('open', k.toUpperCase()); }
 });
 
-// ------------------------------------------------------------------ başlat
+// ------------------------------------------------------------------ start
 renderTools();
 renderIntervals();
 renderTypes();
@@ -1518,7 +1576,7 @@ tickClock();
 setInterval(tickClock, 1000);
 loadWatchlist();
 loadChart();
-// sembol kütüphanesini arka planda ısıt: arama penceresi açılınca hazır olsun
+// warm up the symbol library in the background so search is ready when opened
 setTimeout(() => { fetch('/api/search?q=&cat=crypto').catch(() => {}); }, 1500);
 setInterval(liveUpdate, 20000);
 setInterval(refreshQuotes, 30000);

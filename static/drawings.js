@@ -1,9 +1,9 @@
-// Çizim motoru — Lightweight Charts (v4.1+) series primitive'i üzerinde sınırsız çizim.
-// Noktalar {t: unix saniye, p: fiyat} olarak saklanır; böylece periyot değişince yerinde kalır.
+// Drawing engine — unlimited drawings on a Lightweight Charts (v4.1+) series primitive.
+// Points are stored as {t: unix seconds, p: price}, so drawings stay in place when the interval changes.
 //
-// Çizim nesnesi (hepsi isteğe bağlı alanlar varsayılanlıdır):
-//   color, width, style(0 düz,1 kesik,2 nokta), lineOpacity
-//   fillColor, fillOpacity                       (dikdörtgen, elips, kanal, fib, tarih aralığı)
+// Drawing object (all optional fields have defaults):
+//   color, width, style(0 solid, 1 dashed, 2 dotted), lineOpacity
+//   fillColor, fillOpacity                       (rectangle, ellipse, channel, fib, date range)
 //   text, textColor, textSize, bold, italic, textAlign(left|center|right), textVAlign(top|middle|bottom)
 //   extL, extR, mono(fib tek renk), locked
 
@@ -72,7 +72,7 @@ function median(a) {
   return s[s.length >> 1];
 }
 
-// a→b doğrusunu ekran kutusuna kadar uzat (extL: a'nın gerisine, extR: b'nin ötesine)
+// extend line a→b to the screen box (extL: behind a, extR: beyond b)
 function extendSeg(a, b, extL, extR, W, H) {
   const dx = b.x - a.x, dy = b.y - a.y;
   if (!dx && !dy) return [a, b];
@@ -155,7 +155,7 @@ export class DrawingEngine {
 
   // ------------------------------------------------------------ veri / seri
   setSeries(s) {
-    if (this.series && this.series !== s) { try { this.series.detachPrimitive(this.prim); } catch (_) { /* yok say */ } }
+    if (this.series && this.series !== s) { try { this.series.detachPrimitive(this.prim); } catch (_) { /* ignore */ } }
     if (this.series !== s) { this.series = s; if (s) s.attachPrimitive(this.prim); }
   }
 
@@ -194,7 +194,7 @@ export class DrawingEngine {
     return Math.round(T[i] + f * (T[i + 1] - T[i]));
   }
 
-  // Lightweight Charts tam sayı olmayan indekste 0 döndürüyor: iki mum arasını kendimiz hesaplayalım
+  // Lightweight Charts returns 0 for non-integer indexes: interpolate between two bars ourselves
   _l2x(l) {
     const i = Math.floor(l), f = l - i;
     const x0 = this.ts.logicalToCoordinate(i);
@@ -209,7 +209,7 @@ export class DrawingEngine {
   paneH() { return this.el.clientHeight - this.ts.height(); }
   request() { this.prim.request(); }
 
-  // ------------------------------------------------------------ dışa açık API
+  // ------------------------------------------------------------ public API
   load(list) {
     this.drawings = (Array.isArray(list) ? list : []).filter((d) => d && d.type && Array.isArray(d.pts));
     this.drawings.forEach((d) => { if (!d.id) d.id = uid(); });
@@ -283,7 +283,7 @@ export class DrawingEngine {
 
   count() { return this.drawings.filter((d) => !d.temp).length; }
 
-  // coalesceKey: kaydırıcı gibi art arda gelen değişiklikleri tek "geri al" adımında topla
+  // coalesceKey: merge rapid changes (e.g. a slider) into a single undo step
   updateSelected(patch, coalesceKey = null) {
     const d = this.selected();
     if (!d) return;
@@ -349,7 +349,7 @@ export class DrawingEngine {
     this.select(d.id);
   }
 
-  // ------------------------------------------------------------ iç işler
+  // ------------------------------------------------------------ internals
   _afterHistory() {
     this.creating = null;
     this.drag = null;
@@ -372,7 +372,7 @@ export class DrawingEngine {
   }
 
   _loadDefaults() { try { return JSON.parse(localStorage.getItem('gm.drawDefaults') || '{}'); } catch (_) { return {}; } }
-  _saveDefaults() { try { localStorage.setItem('gm.drawDefaults', JSON.stringify(this.defaults)); } catch (_) { /* yok say */ } }
+  _saveDefaults() { try { localStorage.setItem('gm.drawDefaults', JSON.stringify(this.defaults)); } catch (_) { /* ignore */ } }
 
   _newDrawing(tool, pt) {
     const def = TOOL_DEFS[tool];
@@ -463,7 +463,7 @@ export class DrawingEngine {
     const { x, y } = this._xy(e);
     if (!this._inPane(x, y) || !this.series) return;
 
-    // Shift + sürükle = hızlı ölçüm
+    // Shift + drag = quick measure
     if (this.tool === 'cursor' && e.shiftKey && !this.creating) {
       this._swallowEvent(e);
       this._clearTemp();
@@ -480,7 +480,7 @@ export class DrawingEngine {
       if (hit) {
         this._swallowEvent(e);
         this.select(hit.d.id);
-        if (hit.d.locked) return; // kilitli: seçilir ama taşınmaz
+        if (hit.d.locked) return; // locked: can be selected but not moved
         this.drag = {
           d: hit.d, handle: hit.handle, startX: x, startY: y,
           startL: this.ts.coordinateToLogical(x), snapshot: this._snapshot(),
@@ -490,10 +490,10 @@ export class DrawingEngine {
         return;
       }
       if (this.selectedId) this.select(null);
-      return; // grafiği kaydırmaya izin ver
+      return; // let the chart pan
     }
 
-    // çizim araçları
+    // drawing tools
     this._swallowEvent(e);
     const pt = this._point(x, y);
     if (!pt) return;
@@ -546,7 +546,7 @@ export class DrawingEngine {
   }
 
   async _createText(pt) {
-    const txt = await this.askText('Metin', '');
+    const txt = await this.askText('Text', '');
     if (!txt || !txt.trim()) return;
     const snap = this._snapshot();
     const d = this._newDrawing('text', pt);
@@ -616,7 +616,7 @@ export class DrawingEngine {
       return;
     }
     if (this.creating && this.creating.idx === 1) {
-      // bas-sürükle-bırak ile çizim
+      // press-drag-release drawing
       const { x, y } = this._xy(e);
       if (Math.hypot(x - this.creating.downX, y - this.creating.downY) > 6) {
         const pt = this._point(x, y);
@@ -632,7 +632,7 @@ export class DrawingEngine {
     if (!hit) return;
     e.stopPropagation();
     this.select(hit.d.id);
-    this.onEdit(hit.d); // çift tık: ayarlar penceresi
+    this.onEdit(hit.d); // double-click: settings dialog
   }
 
   _hitTest(x, y) {
@@ -645,7 +645,7 @@ export class DrawingEngine {
       if (d.id !== this.selectedId && d.id !== this.hoverId) continue;
       for (const h of g.handles) if (Math.hypot(h.x - x, h.y - y) <= 7) return { d, handle: h.i };
     }
-    // önce çizgiler/metinler, sonra dolgulu alanlar (dikdörtgen içindeki çizgi seçilebilsin)
+    // lines/text first, then filled areas (so a line inside a rectangle can be selected)
     for (const [d, g] of geoms) {
       for (const s of g.segs) if (!s.deco && distSeg(x, y, s.x1, s.y1, s.x2, s.y2) <= 5) return { d, handle: null };
       for (const b of g.boxes) if (x >= b.x - 3 && x <= b.x + b.w + 3 && y >= b.y - 3 && y <= b.y + b.h + 3) return { d, handle: null };
@@ -668,7 +668,7 @@ export class DrawingEngine {
     return { w: Math.max(1, ...lines.map((l) => this._mctx.measureText(l).width)), h: lines.length * lh, lines, lh };
   }
 
-  // Çizime bağlı metin (TradingView'deki "Metin" sekmesi)
+  // text attached to a drawing (TradingView's "Text" tab)
   _label(d, g, anchor) {
     if (!d.text || d.type === 'text') return;
     const base = { text: d.text, color: d.textColor || d.color, size: d.textSize || 14, bold: d.bold, italic: d.italic };
@@ -793,7 +793,7 @@ export class DrawingEngine {
         break;
       }
       case 'daterange': {
-        // TradingView "Tarih aralığı": kutu + ok + "26 bar, 791 gün" etiketi (kalıcı)
+        // TradingView-style "Date range": box + arrow + "26 bars, 791d" label (persistent)
         const [a, b] = P;
         const x1 = Math.min(a.x, b.x), x2 = Math.max(a.x, b.x), y1 = Math.min(a.y, b.y), y2 = Math.max(a.y, b.y);
         g.polys.push({ pts: [[x1, y1], [x2, y1], [x2, y2], [x1, y2]], fill: fillColor(d) });
@@ -805,10 +805,10 @@ export class DrawingEngine {
         seg({ x: b.x, y: my }, { x: b.x - 8 * dir, y: my + 5 }, { dash: [], deco: true });
         const bars = Math.round(Math.abs(this.t2l(d.pts[1].t) - this.t2l(d.pts[0].t)));
         const days = Math.round(Math.abs(d.pts[1].t - d.pts[0].t) / 86400);
-        const span = days >= 1 ? `${days.toLocaleString('en-US')} gün` : `${Math.round(Math.abs(d.pts[1].t - d.pts[0].t) / 3600)} saat`;
+        const span = days >= 1 ? `${days.toLocaleString('en-US')}d` : `${Math.round(Math.abs(d.pts[1].t - d.pts[0].t) / 3600)}h`;
         const up = d.pts[1].p >= d.pts[0].p;
         g.texts.push({
-          x: (x1 + x2) / 2, y: up ? y1 - 8 : y2 + 8, text: d.text || `${bars} bar, ${span}`,
+          x: (x1 + x2) / 2, y: up ? y1 - 8 : y2 + 8, text: d.text || `${bars} bars, ${span}`,
           color: '#ffffff', bg: 'rgba(42,46,57,0.92)', size: 12, bold: true, align: 'center', valign: up ? 'bottom' : 'top',
         });
         g.handles.push({ x: a.x, y: a.y, i: 0 }, { x: b.x, y: b.y, i: 1 });
@@ -838,11 +838,11 @@ export class DrawingEngine {
         const dp = pb - pa, pct = pa ? (dp / pa) * 100 : 0;
         const bars = Math.round(this.t2l(d.pts[1].t) - this.t2l(d.pts[0].t));
         const secs = Math.abs(d.pts[1].t - d.pts[0].t);
-        const span = secs >= 86400 ? `${Math.round(secs / 86400)} gün` : `${Math.round(secs / 3600)} saat`;
+        const span = secs >= 86400 ? `${Math.round(secs / 86400)}d` : `${Math.round(secs / 3600)}h`;
         const sign = dp > 0 ? '+' : dp < 0 ? '−' : '';
         g.texts.push({
           x: mx, y: up ? y1 - 8 : y2 + 8,
-          text: `${sign}${this.formatPrice(Math.abs(dp))} (${sign}${Math.abs(pct).toFixed(2)}%)\n${bars} bar, ${span}`,
+          text: `${sign}${this.formatPrice(Math.abs(dp))} (${sign}${Math.abs(pct).toFixed(2)}%)\n${bars} bars, ${span}`,
           color: '#ffffff', bg: c, size: 12, align: 'center', valign: up ? 'bottom' : 'top',
         });
         break;
