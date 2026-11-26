@@ -35,7 +35,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("GV_PORT") or os.environ.get("GRAFIK_PORT") or "8765")
 BASE = f"http://127.0.0.1:{PORT}"
 SERVER_NAME = "guraydingview"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 CHART_TZ = timedelta(hours=3)  # the chart shows intraday times in Istanbul time (UTC+3), see TZ in static/app.js
 INTERVALS = ["15m", "1h", "4h", "1d", "1w", "1M"]
 INTRADAY = {"15m", "1h", "4h"}
@@ -63,7 +63,7 @@ COLOR_NAMES = {
 
 INSTRUCTIONS = """\
 Guraydingview is the user's own TradingView-style charting app running on their computer. These tools read
-market and macro data, read and edit the user's watchlist, and read and draw on the user's charts.
+market and macro data, read and edit the user's watchlist, read and draw on the user's charts, and pin news to them.
 
 Symbols: tickers such as GOOGL, VT, BTCUSD, GOLD, SILVER, XU030, USDTRY; macro series such as WALCL (Fed balance
 sheet), USM2, M2V, TCU, USBCOI (ISM manufacturing PMI), USMNO (ISM new orders), USISMMI, TRM1/TRM2 (Turkish M1/M2);
@@ -75,7 +75,15 @@ Values of a billion and more are shown as B / T (T = 10^12); give drawing prices
 Drawings belong to a symbol and show on every interval. Drawings you add are marked as yours. Before you change
 or delete drawings the user made, list them and touch only what the user asked about. Keep drawings few and
 purposeful, and label key levels with short text. After drawing on a symbol the user is not looking at, call
-open_chart so they see it. Describe what the data shows; do not present it as personal investment advice."""
+open_chart so they see it. Describe what the data shows; do not present it as personal investment advice.
+
+News: when the user asks for news about a symbol, find recent news yourself (for example with web search), then
+call add_news with each item's publication date, a short headline, a short summary in your own words, the source and
+the link. They show as lightning markers under the bars of their dates, like TradingView's news flags. Also sum the
+news up in your reply.
+Write the headlines and summaries in the language the user writes to you in (translate them: Turkish for a Turkish
+user, even from English sources). Use plain, consistent wording: call the asset by its name every time (gold, not
+"the yellow metal" or "the precious metal"; bitcoin, not "the largest cryptocurrency"), and no filler words."""
 
 
 class ToolError(Exception):
@@ -669,6 +677,83 @@ def delete_drawings(args):
     return msg
 
 
+# ----------------------------------------------------------------------------
+# Tools: news
+# ----------------------------------------------------------------------------
+def news_line(it):
+    when = fmt_time(it.get("time", 0), intraday=not it.get("date_only"))
+    src = f" · {it['source']}" if it.get("source") else ""
+    who = " (added by Claude)" if it.get("by") == "claude" else ""
+    url = f"\n    {it['url']}" if it.get("url") else ""
+    return f"- [{it.get('id')}] {when}{src}: {it.get('title')}{who}{url}"
+
+
+def add_news(args):
+    sym = req_str(args, "symbol").upper()
+    specs = args.get("items")
+    if not isinstance(specs, list) or not specs:
+        raise ToolError("'items' must be a non-empty list")
+    if len(specs) > 50:
+        raise ToolError("at most 50 news items per call")
+    last_bar(sym)  # the symbol must have data
+    items, errors = [], []
+    for i, s in enumerate(specs, 1):
+        try:
+            if not isinstance(s, dict):
+                raise ToolError("must be an object")
+            title = str(s.get("title") or "").strip()
+            if not title:
+                raise ToolError("'title' is required")
+            tv = s.get("time")
+            url = str(s.get("url") or "").strip()
+            if url and not re.match(r"https?://\S+$", url, re.I):
+                raise ToolError("'url' must be an http(s) link")
+            items.append({"time": to_unix(tv, "time"),
+                          "date_only": isinstance(tv, str) and bool(re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", tv.strip())),
+                          "title": title, "summary": str(s.get("summary") or "").strip(),
+                          "source": str(s.get("source") or "").strip(), "url": url, "by": "claude"})
+        except ToolError as e:
+            errors.append(f"item {i}: {e}")
+    if errors:
+        raise ToolError("No news was added:\n" + "\n".join(errors))
+    delete = []
+    if args.get("replace_previous"):
+        cur = call("GET", f"/api/news?symbol={q(sym)}").get("items") or []
+        delete = [x["id"] for x in cur if x.get("by") == "claude"]
+    r = call("POST", f"/api/news?symbol={q(sym)}", {"add": items, "delete": delete})
+    done = [f"{r['added']} added"]
+    if r.get("updated"):
+        done.append(f"{r['updated']} replaced an older copy (same link or headline)")
+    if r.get("deleted"):
+        done.append(f"{r['deleted']} earlier item{'s' if r['deleted'] != 1 else ''} removed")
+    return (f"{sym} news: {', '.join(done)}; {r['count']} in total. Open charts of {sym} show them as lightning "
+            "markers under the bars of their dates (hover: headline, click: summary and link).")
+
+
+def list_news(args):
+    sym = (args.get("symbol") or "").strip().upper()
+    if not sym:
+        counts = call("GET", "/api/news")
+        if not counts:
+            return "No news has been added to any chart yet."
+        return "News per symbol:\n" + "\n".join(f"- {k}: {v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+    items = call("GET", f"/api/news?symbol={q(sym)}").get("items") or []
+    if not items:
+        return f"{sym} has no news on its chart."
+    return (f"{sym}: {len(items)} news item{'s' if len(items) != 1 else ''}, newest first (YYYY-MM-DD, or chart time, "
+            "Istanbul):\n" + "\n".join(news_line(x) for x in items))
+
+
+def delete_news(args):
+    sym = req_str(args, "symbol").upper()
+    ids = [str(i) for i in (args.get("ids") or [])]
+    everything = bool(args.get("all"))
+    if not ids and not everything:
+        raise ToolError("give 'ids' (see list_news) or set all")
+    r = call("POST", f"/api/news?symbol={q(sym)}", {"delete": ids, "clear": everything})
+    return f"Deleted {r['deleted']} news item{'s' if r['deleted'] != 1 else ''} from {sym}; {r['count']} left."
+
+
 RANGES = ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "All"]
 SCALES = ["linear", "log", "percent"]
 
@@ -816,6 +901,47 @@ TOOL_LIST = [
          "all_added_by_claude": {"type": "boolean"}},
          "required": ["symbol"]},
      "annotations": {"readOnlyHint": False, "destructiveHint": True}},
+    {"name": "add_news", "title": "Pin news to a chart",
+     "description": "Pin news to a symbol's chart. Each item shows as a lightning marker under the bar of its date, "
+                    "like TradingView's news flags: hovering shows the headline, a click shows the summary and the "
+                    "link. Find the news first (for example with web search), prefer reliable sources and the most "
+                    "relevant items (usually 3-10), and give each the date it was published. Write headlines and "
+                    "summaries in the user's language (translate them) with plain, consistent wording: the asset's "
+                    "own name every time, no synonyms like 'the yellow metal'. An item with the same link (or the "
+                    "same headline within two days) replaces the older copy.",
+     "inputSchema": {"type": "object", "properties": {
+         "symbol": SYMBOL,
+         "items": {"type": "array", "minItems": 1, "maxItems": 50, "items": {
+             "type": "object", "properties": {
+                 "time": {"type": ["string", "number"],
+                          "description": "When it was published: YYYY-MM-DD, an ISO time with an offset "
+                                         "(2026-11-25T14:30:00Z) or YYYY-MM-DD HH:MM in chart time (Istanbul, UTC+3)."},
+                 "title": {"type": "string", "description": "The headline in the user's language, short (up to "
+                                                           "about 120 characters)."},
+                 "summary": {"type": "string", "description": "One to three plain sentences in the user's language "
+                                                             "and your own words: what happened and why it matters "
+                                                             "for this symbol. Do not copy the article's text."},
+                 "source": {"type": "string", "description": "Publisher, e.g. Reuters, Bloomberg, a company press "
+                                                            "release."},
+                 "url": {"type": "string", "description": "Link to the article (http/https)."}},
+             "required": ["time", "title"]}},
+         "replace_previous": {"type": "boolean", "description": "First remove the news Claude added to this symbol "
+                                                                "before (the user's view stays uncluttered)."}},
+         "required": ["symbol", "items"]},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True}},
+    {"name": "list_news", "title": "List news",
+     "description": "News pinned to a symbol's chart with ids, dates, sources, headlines and links. Without a "
+                    "symbol: how many news items each symbol has.",
+     "inputSchema": {"type": "object", "properties": {"symbol": SYMBOL}},
+     "annotations": {"readOnlyHint": True}},
+    {"name": "delete_news", "title": "Delete news",
+     "description": "Remove news from a symbol's chart by id (from list_news), or all of its news.",
+     "inputSchema": {"type": "object", "properties": {
+         "symbol": SYMBOL,
+         "ids": {"type": "array", "items": {"type": "string"}},
+         "all": {"type": "boolean"}},
+         "required": ["symbol"]},
+     "annotations": {"readOnlyHint": False, "destructiveHint": True}},
     {"name": "open_chart", "title": "Show a chart",
      "description": "Show a symbol in the user's open chart tab (or open it in the browser if no tab is open), "
                     "optionally with an interval, a date range (like the range buttons; All = the whole history) "
@@ -830,7 +956,7 @@ TOOL_LIST = [
 HANDLERS = {"get_bars": get_bars, "get_quotes": get_quotes, "search_symbols": search_symbols,
             "get_watchlist": get_watchlist, "edit_watchlist": edit_watchlist, "list_drawings": list_drawings,
             "add_drawings": add_drawings, "update_drawings": update_drawings, "delete_drawings": delete_drawings,
-            "open_chart": open_chart}
+            "add_news": add_news, "list_news": list_news, "delete_news": delete_news, "open_chart": open_chart}
 
 
 # ----------------------------------------------------------------------------

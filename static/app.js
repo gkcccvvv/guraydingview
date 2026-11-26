@@ -203,6 +203,7 @@ const state = {
   scaleMode: store.get('scaleMode', 0),
   ext: store.get('extHours', true), // pre-market / after hours (extended session)
   rainbow: urlParams.get('rainbow') === '1' || store.get('rainbow', true), // Bitcoin rainbow bands (BTC charts)
+  showNews: store.get('news', true), // news markers under the bars
   meta: null,
   bars: [],
   dec: 2,
@@ -447,6 +448,186 @@ async function updateRainbow() {
   }
   rainbow.set(on ? rainbowParams : null);
 }
+
+// ---- news (pinned by Claude through the connector's add_news): lightning markers under the bars of their dates,
+// like TradingView's news flags. Hover: headlines; click: summaries and links.
+const NEWS_COLOR = '#f0b90b';
+// the bar a news item belongs to: the last bar at or before its time; one with only a date goes on that day's first
+// bar on intraday charts. -1: older than the data.
+function newsBarIndex(it, bars) {
+  let lo = 0, hi = bars.length - 1, i = -1;
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1;
+    if (bars[m].time <= it.time) { i = m; lo = m + 1; } else hi = m - 1;
+  }
+  if (it.date_only && isIntraday() && i + 1 < bars.length && bars[i + 1].time < it.time + DAY && (i < 0 || bars[i].time < it.time)) i++;
+  return i;
+}
+const newsKey = (g) => g.items.map((it) => it.id).join(',');
+function drawNewsIcon(ctx, x, y, n, hot) {
+  ctx.beginPath();
+  ctx.arc(x, y, 8, 0, Math.PI * 2);
+  ctx.fillStyle = hot ? NEWS_COLOR : '#1e222d';
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = NEWS_COLOR;
+  ctx.stroke();
+  ctx.beginPath(); // lightning bolt
+  ctx.moveTo(x + 1.6, y - 5.6);
+  ctx.lineTo(x - 3.2, y + 0.9);
+  ctx.lineTo(x - 0.3, y + 0.9);
+  ctx.lineTo(x - 1.6, y + 5.6);
+  ctx.lineTo(x + 3.2, y - 0.9);
+  ctx.lineTo(x + 0.3, y - 0.9);
+  ctx.closePath();
+  ctx.fillStyle = hot ? '#1e222d' : NEWS_COLOR;
+  ctx.fill();
+  if (n > 1) { // how many news items the marker holds
+    ctx.beginPath();
+    ctx.arc(x + 7.5, y - 7.5, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#d1d4dc';
+    ctx.fill();
+    ctx.font = `bold 9px ${FONT}`;
+    ctx.fillStyle = '#131722';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(n > 9 ? '9+' : String(n), x + 7.5, y - 7.2);
+  }
+}
+class NewsMarkers {
+  constructor() {
+    this._req = null;
+    this.items = [];
+    this.groups = []; // the markers as drawn: {x, y, items}, for hover and click
+    this.hot = null; // key of the marker whose news are open
+    this.view = { zOrder: () => 'top', renderer: () => ({ draw: (t) => this.draw(t) }) };
+  }
+  attached({ requestUpdate }) { this._req = requestUpdate; }
+  detached() { this._req = null; this.groups = []; }
+  paneViews() { return this.items.length && state.showNews ? [this.view] : []; }
+  set(items) { this.items = items; this.groups = []; this.update(); }
+  update() { if (this._req) this._req(); }
+  draw(target) {
+    const ts = chart.timeScale(), bars = state.bars;
+    const marks = [];
+    for (const it of this.items) {
+      const i = newsBarIndex(it, bars);
+      const x = i < 0 ? null : ts.logicalToCoordinate(i);
+      if (x != null) marks.push({ x, it });
+    }
+    marks.sort((a, b) => a.x - b.x);
+    target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
+      const y = mediaSize.height - 14, groups = [];
+      for (const m of marks) { // markers closer than 18 px are merged into one
+        if (m.x < -10 || m.x > mediaSize.width + 10) continue;
+        const g = groups.at(-1);
+        if (g && m.x - g.x0 < 18) { g.items.push(m.it); g.xs.push(m.x); } else groups.push({ x0: m.x, xs: [m.x], items: [m.it] });
+      }
+      for (const g of groups) {
+        g.x = g.xs.reduce((a, b) => a + b, 0) / g.xs.length;
+        g.y = y;
+        g.items.sort((a, b) => b.time - a.time);
+        drawNewsIcon(ctx, g.x, y, g.items.length, this.hot === newsKey(g));
+      }
+      this.groups = groups;
+    });
+  }
+}
+const newsMarkers = new NewsMarkers();
+let newsFor = null; // the symbol whose news are loaded
+let newsSeq = 0;
+async function loadNews() {
+  const sym = symKey(state.symbol), seq = ++newsSeq;
+  if (sym !== newsFor) { newsFor = sym; newsMarkers.set([]); renderNewsBtn(); }
+  let items = [];
+  try { items = (await api(`/api/news?symbol=${enc(sym)}`)).items || []; } catch (_) { /* no news */ }
+  if (seq !== newsSeq || sym !== symKey(state.symbol)) return;
+  hideNews();
+  newsMarkers.set(items);
+  renderNewsBtn();
+}
+function renderNewsBtn() {
+  const n = newsMarkers.items.length;
+  $('#newsBtn').hidden = !n;
+  $('#newsBtn').classList.toggle('on', state.showNews);
+  $('#newsCount').textContent = n;
+}
+$('#newsBtn').onclick = () => {
+  state.showNews = !state.showNews;
+  store.set('news', state.showNews);
+  hideNews();
+  renderNewsBtn();
+  newsMarkers.update();
+};
+
+const newsPop = document.createElement('div');
+newsPop.id = 'newsPop';
+newsPop.hidden = true;
+$('#chartWrap').append(newsPop);
+let newsPinned = false, newsHideTimer = null;
+function newsWhen(it) {
+  const d = new Date((it.time + (it.date_only ? 0 : TZ)) * 1000);
+  const s = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  return it.date_only ? s : `${s}  ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+function keepNews() { clearTimeout(newsHideTimer); newsHideTimer = null; }
+function hideNewsSoon() { if (!newsHideTimer && !newsPop.hidden) newsHideTimer = setTimeout(hideNews, 250); }
+function hideNews() {
+  keepNews();
+  newsPinned = false;
+  newsPop.hidden = true;
+  if (newsMarkers.hot) { newsMarkers.hot = null; newsMarkers.update(); }
+}
+function showNews(g, pin) {
+  keepNews();
+  newsPinned = pin;
+  newsMarkers.hot = newsKey(g);
+  newsMarkers.update();
+  const n = g.items.length;
+  newsPop.innerHTML = `<div class="nw-head"><span>News${n > 1 ? ` <span class="muted">· ${n}</span>` : ''}</span>`
+    + `<span class="muted">${pin ? 'from Claude' : 'click for more'}</span></div>`
+    + g.items.map((it) => `<div class="nw-item">
+      <div class="nw-meta"><span>${esc(newsWhen(it))}</span>${it.source ? `<span>${esc(it.source)}</span>` : ''}`
+      + `<button class="nw-del" data-id="${esc(it.id)}" title="Remove this news item">×</button></div>`
+      + (it.url ? `<a class="nw-title" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>`
+        : `<div class="nw-title">${esc(it.title)}</div>`)
+      + (it.summary ? `<div class="nw-sum">${esc(it.summary)}</div>` : '') + '</div>').join('');
+  newsPop.classList.toggle('pinned', pin);
+  newsPop.style.maxHeight = `${Math.max(120, g.y - 30)}px`;
+  newsPop.hidden = false;
+  const room = chartEl.clientWidth - chart.priceScale('right').width(), w = newsPop.offsetWidth;
+  newsPop.style.left = `${Math.max(6, Math.min(room - w - 6, g.x - w / 2))}px`;
+  newsPop.style.bottom = `${chartEl.clientHeight - g.y + 14}px`;
+}
+function newsAt(e) {
+  if (!state.showNews || engine.tool !== 'cursor') return null;
+  const r = chartEl.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  return newsMarkers.groups.find((g) => Math.abs(x - g.x) <= 9 && Math.abs(y - g.y) <= 9) || null;
+}
+$('#chartWrap').addEventListener('mousemove', (e) => {
+  if (newsPop.contains(e.target)) { keepNews(); return; }
+  const g = newsAt(e);
+  chartEl.classList.toggle('nw-pointer', !!g);
+  if (newsPinned) return;
+  if (g) { if (newsPop.hidden || newsMarkers.hot !== newsKey(g)) showNews(g, false); else keepNews(); } else hideNewsSoon();
+});
+$('#chartWrap').addEventListener('mouseleave', () => { chartEl.classList.remove('nw-pointer'); if (!newsPinned) hideNewsSoon(); });
+// a click on a marker opens its news (before the chart or the drawing tools see the click); a click elsewhere closes them
+$('#chartWrap').addEventListener('pointerdown', (e) => {
+  if (newsPop.contains(e.target)) return;
+  const g = e.button === 0 ? newsAt(e) : null;
+  if (g) { e.stopPropagation(); e.preventDefault(); showNews(g, true); } else if (!newsPop.hidden) hideNews();
+}, true);
+newsPop.addEventListener('click', async (e) => {
+  const del = e.target.closest('.nw-del');
+  if (!del) return;
+  try {
+    await postJSON(`/api/news?symbol=${enc(newsFor)}`, { delete: [del.dataset.id] });
+  } catch (err) { setSaveState('error', err.message); }
+  loadNews();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !newsPop.hidden) hideNews(); });
+chart.timeScale().subscribeVisibleLogicalRangeChange(() => { if (!newsPop.hidden) hideNews(); }); // the markers moved
 function sessionFlags() {
   const s = state.meta?.session;
   if (!s || !state.ext || !isIntraday()) return [];
@@ -472,7 +653,7 @@ function updateExtLine() {
 function rebuildSeries() {
   engine.setSeries(null);
   if (series) {
-    for (const prim of [shade, rainbow]) try { series.detachPrimitive(prim); } catch (_) { /* ignore */ }
+    for (const prim of [shade, rainbow, newsMarkers]) try { series.detachPrimitive(prim); } catch (_) { /* ignore */ }
     chart.removeSeries(series);
     series = null;
   }
@@ -484,6 +665,7 @@ function rebuildSeries() {
   series.setData(toSeriesData(state.bars, type));
   series.attachPrimitive(rainbow);
   series.attachPrimitive(shade);
+  series.attachPrimitive(newsMarkers);
   shade.set(sessionFlags());
   updateRainbow();
   engine.setSeries(series);
@@ -632,7 +814,9 @@ function handleServerEvent(ev) {
   if (!ev) return;
   if (ev.type === 'hello') { // (re)connected: catch up on changes made while disconnected
     for (const [k, rev] of Object.entries(ev.revs || {})) if (k in drawRev && drawRev[k] !== rev) externalDrawings(k, rev);
+    if (newsFor) loadNews();
   } else if (ev.type === 'drawings' && ev.src !== clientId) externalDrawings(ev.sym, ev.rev);
+  else if (ev.type === 'news') { if (ev.sym === symKey(state.symbol)) loadNews(); }
   else if (ev.type === 'watchlist' && ev.src !== clientId) loadWatchlist();
   else if (ev.type === 'show') {
     const active = store.get('activeTab', null);
@@ -811,6 +995,7 @@ async function loadChart({ keepView = false } = {}) {
   state.dec = decimalsFor(last);
   chart.applyOptions({ timeScale: { timeVisible: isIntraday(), secondsVisible: false } });
   rebuildSeries();
+  if (symKey(sym) !== newsFor) loadNews();
   if (drawings) {
     engine.load(drawings);
     engine._loadedSym = symKey(sym);

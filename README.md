@@ -26,6 +26,9 @@ supply…) on one screen — draw as many trend lines, Fibonacci levels, channel
   (**Rainbow** button in the bottom bar). The fit is recomputed daily from the whole history; a meme heuristic, not advice.
 - **Claude connector:** ask Claude to read your charts and watchlist, draw support / resistance, trend lines and
   Fibonacci levels, or switch the chart you are looking at — changes show up in the open chart right away.
+- **News under the chart:** ask Claude for a symbol's latest news; each item shows as a ⚡ marker under the bar of its
+  date, like TradingView's news flags (hover: headline, click: summary and link). The **⚡** button in the bottom bar
+  shows / hides them.
 - **No console window (Windows):** an icon next to the clock with a right-click menu — open, restart, refresh data,
   log file, folder, desktop / Start menu shortcut, start with Windows, exit.
 
@@ -50,8 +53,8 @@ is created in the folder — use it as the launcher (or right-click the tray ico
 python3 server.py --open
 ```
 
-The server only listens on `127.0.0.1`, so other computers cannot reach it. Your personal data (drawings, watchlist,
-settings, EVDS key) lives in the `data/` folder and is never committed to git.
+The server only listens on `127.0.0.1`, so other computers cannot reach it. Your personal data (drawings, news,
+watchlist, settings, EVDS key) lives in the `data/` folder and is never committed to git.
 
 ## Claude connector
 
@@ -83,11 +86,15 @@ If Guraydingview is not running, the connector starts it. What Claude can do:
 | `search_symbols` | find tickers |
 | `get_watchlist`, `edit_watchlist` | read the watchlist; add, move, remove symbols and sections |
 | `list_drawings`, `add_drawings`, `update_drawings`, `delete_drawings` | read and draw trend lines, levels, channels, boxes, Fibonacci, date ranges, notes |
+| `add_news`, `list_news`, `delete_news` | pin news to a chart (⚡ markers under the bars); Claude finds them with its web search |
 | `open_chart` | switch your open chart to a symbol / interval, optionally a date range (All…) and log scale |
 
 Try: *"Draw the main support and resistance levels on GOOGL's weekly chart"*, *"Mark the periods when USBCOI was
 below 50"*, *"How did BTC do while the Fed balance sheet (WALCL) was shrinking?"*, *"Summarize today's moves in my
-watchlist"*.
+watchlist"*, *"Get this week's news on gold and put it on the chart"*.
+
+News come from Claude's own web search (turn web search on in Claude); Claude writes the headlines and summaries in
+its own words, in the language you chat in (translated from the source), and links the source. In the chart, a click on a marker shows its news; × removes an item.
 
 Drawings Claude adds are marked as Claude's; open charts update right away and **Ctrl+Z** in the chart takes a change
 back. Claude's comments are not investment advice.

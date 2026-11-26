@@ -16,6 +16,7 @@ import html
 import io
 import json
 import os
+import random
 import re
 import shutil
 import socket
@@ -37,6 +38,7 @@ DATA_DIR = os.path.join(ROOT, "data")
 CSV_DIR = os.path.join(DATA_DIR, "csv")
 WATCHLIST_FILE = os.path.join(DATA_DIR, "watchlist.json")
 DRAWINGS_FILE = os.path.join(DATA_DIR, "drawings.json")
+NEWS_FILE = os.path.join(DATA_DIR, "news.json")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 EVDS_BASE = "https://evds3.tcmb.gov.tr/igmevdsms-dis/"  # TCMB EVDS official web service (key sent in the 'key' header)
 HOST = "127.0.0.1"
@@ -1384,6 +1386,71 @@ def drawing_revs():
     return {k: int(v) for k, v in read_json(DRAWINGS_FILE, {}).get(REV_KEY, {}).items()}
 
 
+# ----------------------------------------------------------------------------
+# News per symbol (added by the Claude connector), shown as markers under the chart's bars
+# ----------------------------------------------------------------------------
+NEWS_MAX = 300  # per symbol; the oldest go first
+
+
+def clean_news(item, n):
+    """Check one news item; returns it cleaned up or raises ValueError."""
+    if not isinstance(item, dict):
+        raise ValueError(f"news item {n} must be an object")
+    try:
+        t = int(item.get("time"))
+    except (TypeError, ValueError):
+        raise ValueError(f"news item {n}: time must be unix seconds") from None
+    title = " ".join(str(item.get("title") or "").split())
+    if not title:
+        raise ValueError(f"news item {n}: title is required")
+    url = str(item.get("url") or "").strip()
+    if url and not re.match(r"https?://[^\s]+$", url, re.I):
+        raise ValueError(f"news item {n}: url must be an http(s) link")
+    out = {"id": "n" + format(int(time.time() * 1000), "x") + format(random.getrandbits(20), "05x"),
+           "time": t, "title": title[:300], "summary": str(item.get("summary") or "").strip()[:2000],
+           "source": " ".join(str(item.get("source") or "").split())[:80], "url": url[:2000],
+           "by": str(item.get("by") or "")[:20], "added": int(time.time())}
+    if item.get("date_only"):
+        out["date_only"] = True
+    return out
+
+
+def update_news(key, add=(), delete=(), clear=False):
+    """Add news to a symbol (the same link, or the same headline within two days, replaces the older copy),
+    delete news by id, or clear them all."""
+    with _file_lock:
+        data = read_json(NEWS_FILE, {})
+        items = [] if clear else list(data.get(key, []))
+        before = len(items)
+        ids = {str(i) for i in delete}
+        items = [x for x in items if x.get("id") not in ids]
+        deleted = before - len(items) if not clear else len(data.get(key, []))
+        added = updated = 0
+        for it in add:
+            same = next((x for x in items if (it["url"] and x.get("url") == it["url"]) or (
+                x.get("title", "").lower() == it["title"].lower() and abs(x.get("time", 0) - it["time"]) < 2 * 86400)),
+                None)
+            if same:
+                it["id"] = same["id"]
+                for k in ("summary", "source", "url"):  # what the new copy leaves out stays
+                    it[k] = it[k] or same.get(k, "")
+                same.clear()
+                same.update(it)
+                updated += 1
+            else:
+                items.append(it)
+                added += 1
+        items.sort(key=lambda x: -x.get("time", 0))
+        del items[NEWS_MAX:]
+        if items:
+            data[key] = items
+        else:
+            data.pop(key, None)
+        write_json(NEWS_FILE, data)
+    return {"added": added, "updated": updated, "deleted": deleted, "count": len(items),
+            "ids": [it["id"] for it in add]}
+
+
 def save_csv(symbol, raw):
     """Validate a drag & dropped CSV and save it as data/csv/SYMBOL.csv."""
     name = re.sub(r"[^A-Z0-9_.\-]", "", sym_key(symbol).replace("/", "_"))
@@ -1591,6 +1658,26 @@ class Handler(SimpleHTTPRequestHandler):
                 if not key:
                     return self.send_json({k: v for k, v in data.items() if k != REV_KEY})
                 return self.send_json({"items": data.get(key, []), "rev": int(data.get(REV_KEY, {}).get(key, 0))})
+            if u.path == "/api/news":
+                key = sym_key(arg("symbol"))
+                if method == "POST":
+                    body = self.read_body()
+                    if not key or not isinstance(body, dict):
+                        return self.send_json({"error": "symbol and a JSON body are required"}, 400)
+                    add, delete = body.get("add") or [], body.get("delete") or []
+                    if not isinstance(add, list) or not isinstance(delete, list) or len(add) > 100:
+                        return self.send_json({"error": "'add' (up to 100 items) and 'delete' must be lists"}, 400)
+                    try:
+                        add = [clean_news(x, n) for n, x in enumerate(add, 1)]
+                    except ValueError as e:
+                        return self.send_json({"error": str(e)}, 400)
+                    res = update_news(key, add, delete, bool(body.get("clear")))
+                    publish({"type": "news", "sym": key})
+                    return self.send_json({"ok": True, **res})
+                data = read_json(NEWS_FILE, {})
+                if not key:
+                    return self.send_json({k: len(v) for k, v in data.items() if isinstance(v, list) and v})
+                return self.send_json({"items": data.get(key, [])})
             if u.path == "/api/csv" and method == "POST":
                 return self.send_json(save_csv(arg("symbol"), self.read_raw(20 * 1024 * 1024)))
             if u.path == "/api/config":
