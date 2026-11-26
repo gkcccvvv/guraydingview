@@ -439,10 +439,14 @@ def crypto_history(pair):
 
 
 # Bitcoin rainbow chart: a log regression of the price against the age of the network,
-# log10(price) = a * ln(days since the genesis block) + b, with 9 equal-width bands (in log10) from the lowest to
-# the highest point of the history since 2011 (the thin trading of 2010 is left out of the fit).
+# log10(price) = a * ln(days since the genesis block) + b (daily closes since 2011; the thin trading of 2010 is
+# left out). Each halving cycle's peak has been lower above that line than the one before, so the rainbow is not
+# a set of parallel bands: its bottom follows the trend of the cycle lows and its top the trend of the cycle peaks
+# (both straight lines in ln(days), widened so every low and peak is inside), with 9 equal bands in between.
 GENESIS = int(datetime(2009, 1, 3, tzinfo=timezone.utc).timestamp())
 RAINBOW_FROM = int(datetime(2011, 1, 1, tzinfo=timezone.utc).timestamp())
+HALVINGS = ["2012-11-28", "2016-07-09", "2020-05-11", "2024-04-19",
+            "2028-04-15", "2032-04-15"]  # the last two are estimates (every 210,000 blocks, about 4 years)
 RAINBOW_BANDS = [("Basically a Fire Sale", "#3949ab"), ("BUY!", "#1e88e5"), ("Accumulate", "#00acc1"),
                  ("Still cheap", "#43a047"), ("HODL!", "#9ccc65"), ("Is this a bubble?", "#fdd835"),
                  ("FOMO intensifies", "#fb8c00"), ("Sell. Seriously, SELL!", "#f4511e"),
@@ -453,17 +457,37 @@ def rainbow_params():
     def fit():
         import math
         _, bars = get_series("BTCUSD", "1d")
-        pts = [(math.log((b[0] - GENESIS) / DAY), math.log10(b[4])) for b in bars if b[0] >= RAINBOW_FROM and b[4] > 0]
+        pts = [(bar[0], math.log((bar[0] - GENESIS) / DAY), math.log10(bar[4]))
+               for bar in bars if bar[0] >= RAINBOW_FROM and bar[4] > 0]  # (time, ln days, log10 price)
         n = len(pts)
-        mx, my = sum(x for x, _ in pts) / n, sum(y for _, y in pts) / n
-        a = sum((x - mx) * (y - my) for x, y in pts) / sum((x - mx) ** 2 for x, _ in pts)
+        mx, my = sum(x for _, x, _ in pts) / n, sum(y for _, _, y in pts) / n
+        a = sum((x - mx) * (y - my) for _, x, y in pts) / sum((x - mx) ** 2 for _, x, _ in pts)
         b = my - a * mx
-        res = [y - (a * x + b) for x, y in pts]
-        lo, hi = min(res) - 0.02, max(res) + 0.02
-        k = len(RAINBOW_BANDS)
-        return {"a": a, "b": b, "genesis": GENESIS, "edges": [lo + (hi - lo) * i / k for i in range(k + 1)],
+        rows = [(t, x, y - (a * x + b)) for t, x, y in pts]  # residual: distance from the regression line
+        # each halving cycle's peak and low (residuals); a cycle counts once it has a year of data
+        cuts = [RAINBOW_FROM] + [int(datetime.strptime(h, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+                                 for h in HALVINGS] + [10 ** 12]
+        peaks, lows = [], []
+        for s, e in zip(cuts, cuts[1:]):
+            seg = [r for r in rows if s <= r[0] < e]
+            if seg and seg[-1][0] - seg[0][0] >= 365 * DAY:
+                peaks.append(max(seg, key=lambda r: r[2]))
+                lows.append(min(seg, key=lambda r: r[2]))
+
+        def line(points):  # least squares: residual = m * ln(days) + c
+            xm = sum(x for _, x, _ in points) / len(points)
+            ym = sum(y for _, _, y in points) / len(points)
+            m = sum((x - xm) * (y - ym) for _, x, y in points) / sum((x - xm) ** 2 for _, x, _ in points)
+            return m, ym - m * xm
+
+        mu, cu = line(peaks)
+        ml, cl = line(lows)
+        cu += max(0.0, max(y - (mu * x + cu) for _, x, y in peaks)) + 0.02  # every peak below the top
+        cl -= max(0.0, max((ml * x + cl) - y for _, x, y in lows)) + 0.02   # every low above the bottom
+        return {"genesis": GENESIS, "lower": [a + ml, b + cl], "upper": [a + mu, b + cu],
                 "names": [nm for nm, _ in RAINBOW_BANDS], "colors": [c for _, c in RAINBOW_BANDS],
-                "fit": f"log10(price) = {a:.4f} * ln(days since 2009-01-03) {b:+.4f}, daily closes since 2011"}
+                "fit": f"log10(price) = {a:.4f} * ln(days since 2009-01-03) {b:+.4f} (daily closes since 2011); "
+                       f"bands from the trend of the {len(lows)} halving-cycle lows to that of their peaks"}
     return cached(("rainbow",), DAY, fit)
 
 

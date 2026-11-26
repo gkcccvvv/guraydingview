@@ -370,19 +370,24 @@ class Rainbow {
   draw(target) {
     const p = this.p, ts = chart.timeScale();
     if (!p || !series || !state.bars.length) return;
-    const W = ts.width();
-    const xs = [], logBase = [];
+    const W = ts.width(), nb = p.names.length;
+    // bottom and top of the rainbow (log10 price) are straight lines in ln(days since genesis); they narrow over time
+    const xs = [], lo = [], hi = [];
     for (let x = 0; x <= W + 4; x += 4) {
       const l = ts.coordinateToLogical(x);
       const t = l == null ? null : engine.l2t(l);
       if (t == null || t <= p.genesis + DAY) continue;
+      const lnd = Math.log((t - p.genesis) / DAY);
+      const bottom = p.lower[0] * lnd + p.lower[1];
       xs.push(x);
-      logBase.push(p.a * Math.log((t - p.genesis) / DAY) + p.b);
+      lo.push(bottom);
+      hi.push(Math.max(p.upper[0] * lnd + p.upper[1], bottom + 0.3)); // never collapse, even far in the future
     }
     if (xs.length < 2) return;
-    const yAt = (i, k) => series.priceToCoordinate(10 ** (logBase[i] + p.edges[k]));
+    const yAt = (i, k) => series.priceToCoordinate(10 ** (lo[i] + ((hi[i] - lo[i]) * k) / nb));
     target.useBitmapCoordinateSpace(({ context: ctx, mediaSize, horizontalPixelRatio: hr, verticalPixelRatio: vr }) => {
-      for (let k = 0; k < p.edges.length - 1; k++) {
+      let unnamed = 0; // bands too thin for their name: listed in a small legend instead
+      for (let k = 0; k < nb; k++) {
         const up = [], dn = [];
         xs.forEach((x, i) => {
           const a = yAt(i, k + 1), b = yAt(i, k);
@@ -403,6 +408,21 @@ class Rainbow {
           ctx.textBaseline = 'middle';
           ctx.fillStyle = alpha(p.colors[k], 0.95);
           ctx.fillText(p.names[k], (xr - 8) * hr, ((yTop + yBot) / 2) * vr);
+        } else unnamed++;
+      }
+      if (unnamed) { // legend, top band first, under the symbol legend
+        const x0 = 10, y0 = 56, row = 15;
+        ctx.fillStyle = 'rgba(19,23,34,0.78)';
+        ctx.fillRect(x0 * hr, y0 * vr, 172 * hr, (nb * row + 8) * vr);
+        ctx.font = `${Math.round(11 * vr)}px ${FONT}`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        for (let k = nb - 1, r = 0; k >= 0; k--, r++) {
+          const y = y0 + 4 + r * row + row / 2;
+          ctx.fillStyle = alpha(p.colors[k], 0.85);
+          ctx.fillRect((x0 + 6) * hr, (y - 5) * vr, 10 * hr, 10 * vr);
+          ctx.fillStyle = '#d1d4dc';
+          ctx.fillText(p.names[k], (x0 + 22) * hr, y * vr);
         }
       }
     });
