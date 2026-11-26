@@ -136,6 +136,7 @@ Rows: `date,value` or `date,open,high,low,close`, separated by `,` or `;`. Dates
 - **Shift + drag:** quick measure · **Alt+T/H/V/F/C/R/E:** trend / horizontal / vertical / Fibonacci / channel / rectangle / ellipse
 - **Del:** delete · **Ctrl+Z / Ctrl+Y:** undo / redo · **Ctrl+C / Ctrl+V:** copy / paste (also onto another symbol)
 - **↑ / ↓:** previous / next symbol in the watchlist · all shortcuts: **?** (top right)
+- **Mouse wheel over the price axis:** zoom the prices (around the price under the mouse); **auto** fits them again.
 - Bottom bar: **ETH** (pre-market / after hours), **%**, **log**, **auto** scale.
 - ⚙ → **Chart style:** line / candle colors, background, grid, last price line, pre-market / after-hours colors.
 - Open a chart directly: `http://127.0.0.1:8765/?symbol=GOOGL&interval=1h` — add `&range=All&scale=log` for the

@@ -243,6 +243,13 @@ const chart = LC.createChart(chartEl, {
 });
 let series = null;
 
+// This chart version has no "set price range": to show a given price range we autoscale to it for a frame, then turn
+// autoscale off so it stays (setPriceRange). The provider below sits on the price series for good and returns
+// forcedPrice while one is set: the library ignores options set to undefined, so a provider can't be taken off again.
+let forcedPrice = null; // [low, high] at the inner edges of the scale margins
+let priceFreeze = 0;
+const priceAutoscale = (base) => (forcedPrice ? { priceRange: { minValue: forcedPrice[0], maxValue: forcedPrice[1] } } : base());
+
 // Empty future slots after the last bar: they put future dates on the time axis and let you scroll and draw into
 // the future. They sit on a hidden series of their own, so live updates of the price series keep working.
 const futureSeries = chart.addLineSeries({ visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
@@ -302,7 +309,7 @@ function seriesStyle(type) {
 }
 
 function createSeries(type) {
-  const opts = { ...seriesStyle(type), priceFormat: priceFormat() };
+  const opts = { ...seriesStyle(type), priceFormat: priceFormat(), autoscaleInfoProvider: priceAutoscale };
   if (type === 'line') return chart.addLineSeries(opts);
   if (type === 'bars') return chart.addBarSeries(opts);
   return chart.addCandlestickSeries(opts);
@@ -597,9 +604,8 @@ async function showRangeAndScale(range, scale) {
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))));
   if (scale) setScaleByName(scale);
   if (range) {
-    chart.priceScale('right').applyOptions({ autoScale: true }); // fit the prices of the whole range
+    setAutoScale(); // fit the prices of the whole range
     applyRange(range);
-    renderScaleBtns();
   }
 }
 
@@ -691,28 +697,66 @@ chartEl.addEventListener('wheel', scheduleViewSave, { passive: true });
 chartEl.addEventListener('mouseup', scheduleViewSave);
 window.addEventListener('beforeunload', saveView);
 
+// show prices lo…hi between the inner edges of the scale margins, as a manual (non-auto) price scale
+function setPriceRange(lo, hi) {
+  forcedPrice = [lo, hi];
+  chart.priceScale('right').applyOptions({ autoScale: true });
+  const token = ++priceFreeze;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (token !== priceFreeze) return; // a newer range or Auto came in meanwhile
+    chart.priceScale('right').applyOptions({ autoScale: false });
+    forcedPrice = null;
+    renderScaleBtns();
+    scheduleViewSave();
+  }));
+}
+
+// automatic price scale: fit the prices of the visible bars
+function setAutoScale() {
+  priceFreeze++;
+  forcedPrice = null;
+  chart.priceScale('right').applyOptions({ autoScale: true });
+  renderScaleBtns();
+}
+
 function restoreView(key) {
   const v = views[key];
   if (!v || !series) return false;
   restoring = true;
   chart.timeScale().setVisibleLogicalRange({ from: engine.t2l(v.from), to: engine.t2l(v.to) });
-  const ps = chart.priceScale('right');
-  ps.applyOptions({ autoScale: true });
-  if (v.price) {
-    // no direct "set price range" in this chart version: autoscale to the saved range once, then freeze it
-    const [lo, hi] = v.price;
-    series.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: lo, maxValue: hi } }) });
-  }
+  if (v.price) setPriceRange(v.price[0], v.price[1]); else setAutoScale();
   requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (v.price && series) {
-      ps.applyOptions({ autoScale: false });
-      series.applyOptions({ autoscaleInfoProvider: undefined });
-    }
     restoring = false;
     renderScaleBtns();
   }));
   return true;
 }
+
+// Mouse wheel over the price axis zooms the prices, around the price under the mouse (wheel up: zoom in).
+// The deltas of one frame are added up and applied together.
+let wheelZoom = null;
+chartEl.addEventListener('wheel', (e) => {
+  if (!series || !state.bars.length || !e.deltaY) return;
+  const rect = chartEl.getBoundingClientRect();
+  const paneH = chartEl.clientHeight - chart.timeScale().height();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  if (x < chartEl.clientWidth - chart.priceScale('right').width() || y > paneH) return;
+  e.preventDefault();
+  e.stopPropagation(); // not a time zoom
+  const dy = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? paneH : 1);
+  if (wheelZoom) { wheelZoom.dy += dy; wheelZoom.y = y; return; }
+  wheelZoom = { dy, y };
+  requestAnimationFrame(() => {
+    const { dy: d, y: y0 } = wheelZoom;
+    wheelZoom = null;
+    if (!series) return;
+    const k = Math.exp(Math.max(-600, Math.min(600, d)) * 0.0014); // one wheel notch (100): 15 %
+    const edge = (yy) => series.coordinateToPrice(y0 + (yy - y0) * k);
+    const hi = edge(paneH * 0.1), lo = edge(paneH * 0.92);
+    if (hi == null || lo == null || !isFinite(hi) || !isFinite(lo) || hi - lo <= Math.abs(hi) * 1e-7) return;
+    setPriceRange(lo, hi);
+  });
+}, { capture: true, passive: false });
 
 function showOverlay(msg, isErr = false) {
   const o = $('#overlay');
@@ -781,10 +825,9 @@ async function loadChart({ keepView = false } = {}) {
     ts.setVisibleLogicalRange({ from: r - view.width, to: r });
   } else if (!restoreView(viewKey())) {
     // first visit: latest bars, automatic price scale (don't carry another symbol's manual range)
-    chart.priceScale('right').applyOptions({ autoScale: true });
+    setAutoScale();
     const w = j.kind === 'line' ? Math.min(n, 400) : Math.min(n, 180);
     ts.setVisibleLogicalRange({ from: n - w, to: n - 1 + 12 });
-    renderScaleBtns();
   }
   shownKey = viewKey();
   renderLegend();
@@ -957,7 +1000,7 @@ function setScaleByName(name) {
 }
 $('#pctBtn').onclick = () => setScaleMode(2);
 $('#logBtn').onclick = () => setScaleMode(1);
-$('#autoBtn').onclick = () => { chart.priceScale('right').applyOptions({ autoScale: true }); renderScaleBtns(); };
+$('#autoBtn').onclick = setAutoScale;
 // pre-market / after hours on-off (TradingView "Extended trading hours")
 $('#rainbowBtn').onclick = () => {
   state.rainbow = !state.rainbow;
