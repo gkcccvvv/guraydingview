@@ -20,6 +20,9 @@ supply…) on one screen — draw as many trend lines, Fibonacci levels, channel
 - **Ratio charts:** `GOLD/SILVER`, `XU030/USDTRY`, `GOLD/BTCUSD`…
 - **Pre-market / after hours** (US stocks and ETFs): intraday bars with shaded sessions, watchlist marker, price line.
 - **Macro data:** FRED, ISM (PMI, New Orders, Inventories, Employment), Turkish central bank EVDS (M1, M2 and any series).
+- **Year-over-year change:** **YoY %** in the bottom bar adds a band under the chart with the change against a year
+  earlier, with its own % scale (like FRED's "percent change from year ago") — handy for M2, the Fed balance sheet or
+  any price. Remembered per symbol.
 - **Your own data:** drag & drop a CSV file onto the chart.
 - **Chart style:** candle / line colors, background, grid, last price line, pre-market / after-hours colors — with opacity.
 - **Bitcoin rainbow chart:** on BTC charts, colored log-regression bands behind the price, from 2010 into the future
@@ -147,7 +150,8 @@ Rows: `date,value` or `date,open,high,low,close`, separated by `,` or `;`. Dates
 - Bottom bar: **ETH** (pre-market / after hours), **%**, **log**, **auto** scale.
 - ⚙ → **Chart style:** line / candle colors, background, grid, last price line, pre-market / after-hours colors.
 - Open a chart directly: `http://127.0.0.1:8765/?symbol=GOOGL&interval=1h` — add `&range=All&scale=log` for the
-  whole history on a log scale (`range`: 1D … 5Y, All · `scale`: linear, log, percent)
+  whole history on a log scale (`range`: 1D … 5Y, All · `scale`: linear, log, percent), `&yoy=1` (or `0`) to switch
+  the YoY band on (off) for that symbol
 
 ## Data sources and notes
 

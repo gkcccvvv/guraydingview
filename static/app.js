@@ -229,6 +229,9 @@ const chartLayout = () => ({
 });
 
 const chartEl = $('#chart');
+// room above and below the prices; with the YoY band on, the prices leave the bottom third to it
+const MAIN_MARGINS = { top: 0.1, bottom: 0.08 };
+const MAIN_MARGINS_YOY = { top: 0.08, bottom: 0.32 };
 const chart = LC.createChart(chartEl, {
   autoSize: true,
   ...chartLayout(),
@@ -237,7 +240,7 @@ const chart = LC.createChart(chartEl, {
     vertLine: { color: '#9598a1', width: 1, style: LC.LineStyle.Dashed, labelBackgroundColor: '#363a45' },
     horzLine: { color: '#9598a1', width: 1, style: LC.LineStyle.Dashed, labelBackgroundColor: '#363a45' },
   },
-  rightPriceScale: { borderColor: C.border, scaleMargins: { top: 0.1, bottom: 0.08 }, mode: state.scaleMode },
+  rightPriceScale: { borderColor: C.border, scaleMargins: MAIN_MARGINS, mode: state.scaleMode },
   timeScale: { borderColor: C.border, rightOffset: 12, barSpacing: 7, minBarSpacing: 0.2, tickMarkFormatter: tickFmt },
   localization: { locale: 'en-US', timeFormatter: fmtTime, priceFormatter: (p) => fmtPrice(p) },
   kineticScroll: { mouse: false, touch: true },
@@ -250,6 +253,8 @@ let series = null;
 let forcedPrice = null; // [low, high] at the inner edges of the scale margins
 let priceFreeze = 0;
 const priceAutoscale = (base) => (forcedPrice ? { priceRange: { minValue: forcedPrice[0], maxValue: forcedPrice[1] } } : base());
+// y of the inner edges of the price scale margins (top, bottom) in a pane of height h
+const priceEdges = (h) => { const m = chart.priceScale('right').options().scaleMargins; return [h * m.top, h * (1 - m.bottom)]; };
 
 // Empty future slots after the last bar: they put future dates on the time axis and let you scroll and draw into
 // the future. They sit on a hidden series of their own, so live updates of the price series keep working.
@@ -628,6 +633,143 @@ newsPop.addEventListener('click', async (e) => {
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !newsPop.hidden) hideNews(); });
 chart.timeScale().subscribeVisibleLogicalRangeChange(() => { if (!newsPop.hidden) hideNews(); }); // the markers moved
+
+// ---- year-over-year change (%) in a band under the prices, like FRED's "percent change from year ago". Per symbol,
+// switched with "YoY %" in the bottom bar (or ?yoy=1 in the URL); not on intraday charts.
+const YOY_COLOR = '#ff9800';
+const YOY_MARGINS = { top: 0.74, bottom: 0.07 };
+const yoySyms = new Set(store.get('yoy', []));
+if (['0', '1'].includes(urlParams.get('yoy'))) {
+  yoySyms[urlParams.get('yoy') === '1' ? 'add' : 'delete'](symKey(state.symbol));
+  store.set('yoy', [...yoySyms]);
+}
+const yoySeries = chart.addLineSeries({
+  priceScaleId: 'yoy', color: YOY_COLOR, lineWidth: 2, visible: false,
+  lastValueVisible: false, priceLineVisible: false, crosshairMarkerRadius: 3,
+});
+chart.priceScale('yoy').applyOptions({ scaleMargins: YOY_MARGINS });
+let yoyData = [];
+let yoyByTime = new Map();
+// change against the bar about a year earlier (the nearest one, if it is close enough to a year back)
+function yoyPoints(bars) {
+  const n = bars.length;
+  if (n < 3) return [];
+  const steps = [];
+  for (let i = Math.max(1, n - 60); i < n; i++) steps.push(bars[i].time - bars[i - 1].time);
+  steps.sort((a, b) => a - b);
+  const tol = Math.max(4 * DAY, steps[steps.length >> 1] * 0.6);
+  const out = [];
+  for (let i = 1, j = 0; i < n; i++) {
+    const target = bars[i].time - 365.25 * DAY;
+    while (j + 1 < i && bars[j + 1].time <= target) j++;
+    const k = j + 1 < i && Math.abs(bars[j + 1].time - target) < Math.abs(bars[j].time - target) ? j + 1 : j;
+    const prev = bars[k].close;
+    if (Math.abs(bars[k].time - target) > tol || !(prev > 0)) continue;
+    out.push({ time: bars[i].time, value: (bars[i].close / prev - 1) * 100 });
+  }
+  return out;
+}
+const fmtPct = (v, dp = 1) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(dp)}%`;
+// where the band sits in a pane of height H: the line between prices and band, and round-percentage ticks
+function yoyLayout(H) {
+  const hi = yoySeries.coordinateToPrice(H * YOY_MARGINS.top), lo = yoySeries.coordinateToPrice(H * (1 - YOY_MARGINS.bottom));
+  if (!yoyData.length || hi == null || lo == null || !(hi > lo)) return null;
+  const sep = Math.round((H * (1 - MAIN_MARGINS_YOY.bottom + YOY_MARGINS.top)) / 2) + 0.5;
+  const raw = (hi - lo) / 4, p = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * p).find((s) => s >= raw);
+  const ticks = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) {
+    const zero = Math.abs(v) < step / 1e6;
+    ticks.push({ v: zero ? 0 : +v.toFixed(6), y: Math.round(yoySeries.priceToCoordinate(v)) + 0.5, zero });
+  }
+  return { sep, ticks, lastY: yoySeries.priceToCoordinate(yoyData.at(-1).value) };
+}
+// in the chart: the dividing line, the title and the grid lines of the band
+class YoyBand {
+  constructor() {
+    this._req = null;
+    this.view = { zOrder: () => 'top', renderer: () => ({ draw: (t) => this.draw(t) }) };
+  }
+  attached({ requestUpdate }) { this._req = requestUpdate; }
+  detached() { this._req = null; }
+  paneViews() { return yoyData.length ? [this.view] : []; }
+  update() { if (this._req) this._req(); }
+  draw(target) {
+    target.useMediaCoordinateSpace(({ context: ctx, mediaSize: { width: W, height: H } }) => {
+      const L = yoyLayout(H);
+      if (!L) return;
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(242,242,242,0.14)';
+      ctx.beginPath(); ctx.moveTo(0, L.sep); ctx.lineTo(W, L.sep); ctx.stroke();
+      for (const t of L.ticks) {
+        ctx.strokeStyle = t.zero ? 'rgba(242,242,242,0.3)' : 'rgba(242,242,242,0.07)';
+        ctx.setLineDash(t.zero ? [] : [4, 4]);
+        ctx.beginPath(); ctx.moveTo(0, t.y); ctx.lineTo(W, t.y); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.font = `11px ${FONT}`;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = YOY_COLOR;
+      ctx.fillText('YoY %', 8, L.sep + 11);
+    });
+  }
+}
+// on the price axis: the band gets its own scale (percentages instead of the prices) and its latest value
+class YoyAxis {
+  constructor() {
+    this._req = null;
+    this.view = { zOrder: () => 'top', renderer: () => ({ draw: (t) => this.draw(t) }) };
+  }
+  attached({ requestUpdate }) { this._req = requestUpdate; }
+  detached() { this._req = null; }
+  priceAxisPaneViews() { return yoyData.length ? [this.view] : []; }
+  update() { if (this._req) this._req(); }
+  draw(target) {
+    target.useMediaCoordinateSpace(({ context: ctx, mediaSize: { width: W, height: H } }) => {
+      const L = yoyLayout(H);
+      if (!L) return;
+      ctx.fillStyle = CS.bg;
+      ctx.fillRect(0, L.sep, W, H - L.sep);
+      ctx.strokeStyle = 'rgba(242,242,242,0.14)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, L.sep); ctx.lineTo(W, L.sep); ctx.stroke();
+      ctx.font = `12px ${FONT}`;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = CS.text;
+      for (const t of L.ticks) if (t.y > L.sep + 8) ctx.fillText(`${t.v}%`, 8, t.y);
+      if (L.lastY != null && L.lastY > L.sep) {
+        ctx.fillStyle = YOY_COLOR;
+        ctx.fillRect(0, L.lastY - 10, W, 20);
+        ctx.fillStyle = '#131722';
+        ctx.fillText(fmtPct(yoyData.at(-1).value), 8, L.lastY);
+      }
+    });
+  }
+}
+const yoyBand = new YoyBand();
+const yoyAxis = new YoyAxis(); // attached to the price series (rebuildSeries): the right axis belongs to it
+yoySeries.attachPrimitive(yoyBand);
+const yoyOn = () => yoySyms.has(symKey(state.symbol)) && !isIntraday();
+function updateYoy() {
+  yoyData = yoyOn() && series ? yoyPoints(state.bars) : [];
+  yoyByTime = new Map(yoyData.map((p) => [p.time, p.value]));
+  yoySeries.setData(yoyData);
+  yoySeries.applyOptions({ visible: yoyData.length > 0 });
+  chart.priceScale('right').applyOptions({ scaleMargins: yoyData.length ? MAIN_MARGINS_YOY : MAIN_MARGINS });
+  $('#yoyBtn').hidden = isIntraday();
+  $('#yoyBtn').classList.toggle('on', yoyOn());
+  yoyBand.update();
+  yoyAxis.update();
+}
+$('#yoyBtn').onclick = () => {
+  const k = symKey(state.symbol);
+  if (yoySyms.has(k)) yoySyms.delete(k); else yoySyms.add(k);
+  store.set('yoy', [...yoySyms]);
+  updateYoy();
+  renderLegend(state.crosshair?.logical);
+};
 function sessionFlags() {
   const s = state.meta?.session;
   if (!s || !state.ext || !isIntraday()) return [];
@@ -653,24 +795,26 @@ function updateExtLine() {
 function rebuildSeries() {
   engine.setSeries(null);
   if (series) {
-    for (const prim of [shade, rainbow, newsMarkers]) try { series.detachPrimitive(prim); } catch (_) { /* ignore */ }
+    for (const prim of [shade, rainbow, newsMarkers, yoyAxis]) try { series.detachPrimitive(prim); } catch (_) { /* ignore */ }
     chart.removeSeries(series);
     series = null;
   }
   extLine = null;
   futureSeries.setData([]);
-  if (!state.bars.length) return;
+  if (!state.bars.length) { updateYoy(); return; }
   const type = effType();
   series = createSeries(type);
   series.setData(toSeriesData(state.bars, type));
   series.attachPrimitive(rainbow);
   series.attachPrimitive(shade);
   series.attachPrimitive(newsMarkers);
+  series.attachPrimitive(yoyAxis);
   shade.set(sessionFlags());
   updateRainbow();
   engine.setSeries(series);
   engine.setData(state.bars);
   setFuture();
+  updateYoy();
   updateExtLine();
 }
 
@@ -868,7 +1012,8 @@ function saveView() {
   if (!chart.priceScale('right').options().autoScale) {
     // price at the inner edges (inside the scale margins) so restoring lands on exactly the same range
     const h = chartEl.clientHeight - chart.timeScale().height();
-    const hi = series.coordinateToPrice(h * 0.1), lo = series.coordinateToPrice(h * 0.92);
+    const [yTop, yBot] = priceEdges(h);
+    const hi = series.coordinateToPrice(yTop), lo = series.coordinateToPrice(yBot);
     if (hi != null && lo != null && isFinite(hi) && isFinite(lo)) v.price = [lo, hi];
   }
   views[shownKey] = v;
@@ -936,7 +1081,8 @@ chartEl.addEventListener('wheel', (e) => {
     if (!series) return;
     const k = Math.exp(Math.max(-600, Math.min(600, d)) * 0.0014); // one wheel notch (100): 15 %
     const edge = (yy) => series.coordinateToPrice(y0 + (yy - y0) * k);
-    const hi = edge(paneH * 0.1), lo = edge(paneH * 0.92);
+    const [yTop, yBot] = priceEdges(paneH);
+    const hi = edge(yTop), lo = edge(yBot);
     if (hi == null || lo == null || !isFinite(hi) || !isFinite(lo) || hi - lo <= Math.abs(hi) * 1e-7) return;
     setPriceRange(lo, hi);
   });
@@ -1039,6 +1185,7 @@ async function liveUpdate() {
       engine.updateBar(bar);
     }
     if (state.bars.length !== nBefore) { shade.set(sessionFlags()); setFuture(); }
+    if (yoyOn()) updateYoy();
     if (!state.crosshair) renderLegend();
     document.title = `${sym} ${fmtPrice(state.bars.at(-1).close)} — Guraydingview`;
   } catch (_) { /* temporary error — retried next round */ }
@@ -1087,6 +1234,8 @@ function renderLegend(idx = null) {
     const bc = b.close >= b.open ? 'up' : 'down';
     el.innerHTML = ['O', 'H', 'L', 'C'].map((k, n) => `<span class="k">${k}</span><span class="${bc}">${fmtPrice([b.open, b.high, b.low, b.close][n])}</span>`).join('') + chgHtml;
   }
+  const yoy = yoyByTime.get(b.time);
+  if (yoy != null) el.innerHTML += `<span class="k yoy">YoY</span><span class="${yoy >= 0 ? 'up' : 'down'}">${fmtPct(yoy, 2)}</span>`;
 }
 
 function renderDetail() {

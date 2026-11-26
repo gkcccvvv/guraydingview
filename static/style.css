@@ -171,6 +171,8 @@ a.nw-title:hover { color: #5b8cff; text-decoration: underline; }
 #lgVals .k { color: var(--muted); margin-left: 8px; }
 #lgVals .k:first-child { margin-left: 0; }
 #lgVals .chg { margin-left: 10px; }
+#lgVals .k.yoy { margin-left: 12px; color: #ff9800; }
+#lgVals .k.yoy + span { margin-left: 4px; }
 
 #overlay {
   position: absolute;
