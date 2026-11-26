@@ -202,6 +202,7 @@ const state = {
   chartType: store.get('chartType', 'candles'),
   scaleMode: store.get('scaleMode', 0),
   ext: store.get('extHours', true), // pre-market / after hours (extended session)
+  rainbow: urlParams.get('rainbow') === '1' || store.get('rainbow', true), // Bitcoin rainbow bands (BTC charts)
   meta: null,
   bars: [],
   dec: 2,
@@ -353,6 +354,72 @@ class SessionShade {
   }
 }
 const shade = new SessionShade();
+
+// ---- Bitcoin rainbow chart: colored log-regression bands behind the price (parameters from /api/rainbow)
+const isBtc = (s) => /^(BINANCE:)?BTCUSDT?$|^BTC-USD$/.test(symKey(s));
+class Rainbow {
+  constructor() {
+    this._req = null;
+    this.p = null;
+    this.view = { zOrder: () => 'bottom', renderer: () => ({ draw: (t) => this.draw(t) }) };
+  }
+  attached({ requestUpdate }) { this._req = requestUpdate; }
+  detached() { this._req = null; }
+  paneViews() { return this.p ? [this.view] : []; }
+  set(p) { this.p = p; if (this._req) this._req(); }
+  draw(target) {
+    const p = this.p, ts = chart.timeScale();
+    if (!p || !series || !state.bars.length) return;
+    const W = ts.width();
+    const xs = [], logBase = [];
+    for (let x = 0; x <= W + 4; x += 4) {
+      const l = ts.coordinateToLogical(x);
+      const t = l == null ? null : engine.l2t(l);
+      if (t == null || t <= p.genesis + DAY) continue;
+      xs.push(x);
+      logBase.push(p.a * Math.log((t - p.genesis) / DAY) + p.b);
+    }
+    if (xs.length < 2) return;
+    const yAt = (i, k) => series.priceToCoordinate(10 ** (logBase[i] + p.edges[k]));
+    target.useBitmapCoordinateSpace(({ context: ctx, mediaSize, horizontalPixelRatio: hr, verticalPixelRatio: vr }) => {
+      for (let k = 0; k < p.edges.length - 1; k++) {
+        const up = [], dn = [];
+        xs.forEach((x, i) => {
+          const a = yAt(i, k + 1), b = yAt(i, k);
+          if (a != null && b != null) { up.push([x, a]); dn.push([x, b]); }
+        });
+        if (up.length < 2) continue;
+        ctx.beginPath();
+        up.forEach(([x, y], i) => (i ? ctx.lineTo(x * hr, y * vr) : ctx.moveTo(x * hr, y * vr)));
+        for (let i = dn.length - 1; i >= 0; i--) ctx.lineTo(dn[i][0] * hr, dn[i][1] * vr);
+        ctx.closePath();
+        ctx.fillStyle = alpha(p.colors[k], 0.3);
+        ctx.fill();
+        // band name at the right edge, where the band is tall enough
+        const [xr, yTop] = up[up.length - 1], yBot = dn[dn.length - 1][1];
+        if (yBot - yTop >= 14 && yTop < mediaSize.height && yBot > 0) {
+          ctx.font = `${Math.round(11 * vr)}px ${FONT}`;
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = alpha(p.colors[k], 0.95);
+          ctx.fillText(p.names[k], (xr - 8) * hr, ((yTop + yBot) / 2) * vr);
+        }
+      }
+    });
+  }
+}
+const rainbow = new Rainbow();
+let rainbowParams = null;
+async function updateRainbow() {
+  const on = state.rainbow && isBtc(state.symbol);
+  $('#rainbowBtn').hidden = !isBtc(state.symbol);
+  $('#rainbowBtn').classList.toggle('on', on);
+  if (on && !rainbowParams) {
+    try { rainbowParams = await api('/api/rainbow'); } catch (_) { rainbowParams = null; }
+    if (rainbowParams) $('#rainbowBtn').title = `Bitcoin rainbow chart: ${rainbowParams.fit}`;
+  }
+  rainbow.set(on ? rainbowParams : null);
+}
 function sessionFlags() {
   const s = state.meta?.session;
   if (!s || !state.ext || !isIntraday()) return [];
@@ -377,15 +444,21 @@ function updateExtLine() {
 
 function rebuildSeries() {
   engine.setSeries(null);
-  if (series) { try { series.detachPrimitive(shade); } catch (_) { /* ignore */ } chart.removeSeries(series); series = null; }
+  if (series) {
+    for (const prim of [shade, rainbow]) try { series.detachPrimitive(prim); } catch (_) { /* ignore */ }
+    chart.removeSeries(series);
+    series = null;
+  }
   extLine = null;
   futureSeries.setData([]);
   if (!state.bars.length) return;
   const type = effType();
   series = createSeries(type);
   series.setData(toSeriesData(state.bars, type));
+  series.attachPrimitive(rainbow);
   series.attachPrimitive(shade);
   shade.set(sessionFlags());
+  updateRainbow();
   engine.setSeries(series);
   engine.setData(state.bars);
   setFuture();
@@ -479,7 +552,7 @@ document.addEventListener('visibilitychange', markActiveTab);
 window.addEventListener('beforeunload', () => { if (store.get('activeTab', null) === clientId) store.set('activeTab', null); });
 markActiveTab();
 
-function showChart(sym, iv) {
+async function showChart(sym, iv, range = '', scale = '') {
   sym = symKey(sym);
   let changed = false;
   if (['15m', '1h', '4h', '1d', '1w', '1M'].includes(iv) && iv !== state.interval) {
@@ -494,23 +567,51 @@ function showChart(sym, iv) {
     engine.setTool('cursor');
     changed = true;
   }
-  if (changed) { loadChart(); renderWatchlist(); }
+  if (changed) { renderWatchlist(); await loadChart(); }
+  showRangeAndScale(range, scale);
 }
 
-// live updates from the server (/api/events)
+async function showRangeAndScale(range, scale) {
+  if (!range && !scale) return;
+  // after restoreView has finished (it re-freezes a saved manual price range two frames after loading)
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))));
+  if (scale) setScaleByName(scale);
+  if (range) {
+    chart.priceScale('right').applyOptions({ autoScale: true }); // fit the prices of the whole range
+    applyRange(range);
+    renderScaleBtns();
+  }
+}
+
+// Live updates from the server (/api/events). Only one tab per browser keeps the connection open (browsers allow
+// just 6 connections to a site, shared by all tabs) and passes the events on to the other tabs.
+const evRelay = 'BroadcastChannel' in window ? new BroadcastChannel('gv-events') : null;
+if (evRelay) evRelay.onmessage = ({ data }) => handleServerEvent(data);
+function listenToServer() {
+  return new Promise(() => { // never resolves: this tab keeps the lock (and the connection) until it closes
+    new EventSource('/api/events').onmessage = ({ data }) => {
+      let ev;
+      try { ev = JSON.parse(data); } catch (_) { return; }
+      handleServerEvent(ev);
+      if (evRelay) evRelay.postMessage(ev);
+    };
+  });
+}
 if ('EventSource' in window) {
-  new EventSource('/api/events').onmessage = ({ data }) => {
-    let ev;
-    try { ev = JSON.parse(data); } catch (_) { return; }
-    if (ev.type === 'hello') { // (re)connected: catch up on changes made while disconnected
-      for (const [k, rev] of Object.entries(ev.revs || {})) if (k in drawRev && drawRev[k] !== rev) externalDrawings(k, rev);
-    } else if (ev.type === 'drawings' && ev.src !== clientId) externalDrawings(ev.sym, ev.rev);
-    else if (ev.type === 'watchlist' && ev.src !== clientId) loadWatchlist();
-    else if (ev.type === 'show') {
-      const active = store.get('activeTab', null);
-      if (!active || active === clientId) showChart(ev.symbol, ev.interval);
-    }
-  };
+  if (navigator.locks && evRelay) navigator.locks.request('guraydingview-events', listenToServer);
+  else listenToServer();
+}
+
+function handleServerEvent(ev) {
+  if (!ev) return;
+  if (ev.type === 'hello') { // (re)connected: catch up on changes made while disconnected
+    for (const [k, rev] of Object.entries(ev.revs || {})) if (k in drawRev && drawRev[k] !== rev) externalDrawings(k, rev);
+  } else if (ev.type === 'drawings' && ev.src !== clientId) externalDrawings(ev.sym, ev.rev);
+  else if (ev.type === 'watchlist' && ev.src !== clientId) loadWatchlist();
+  else if (ev.type === 'show') {
+    const active = store.get('activeTab', null);
+    if (!active || active === clientId) showChart(ev.symbol, ev.interval, ev.range, ev.scale);
+  }
 }
 
 window.addEventListener('beforeunload', () => {
@@ -796,15 +897,21 @@ function renderRanges() {
 }
 $('#rangeBox').addEventListener('click', (e) => {
   const b = e.target.closest('[data-range]');
-  if (!b || !state.bars.length) return;
-  const spec = RANGES.find(([l]) => l === b.dataset.range)[1];
+  if (b) applyRange(b.dataset.range);
+});
+
+// show a date range (a RANGES label: 1D … 5Y, All)
+function applyRange(label) {
+  const r = RANGES.find(([l]) => l.toLowerCase() === String(label).toLowerCase());
+  if (!r || !state.bars.length) return;
+  const spec = r[1];
   const n = state.bars.length, lastT = state.bars[n - 1].time;
   let from;
   if (spec === 'all') from = 0;
   else if (spec === 'ytd') from = engine.t2l(Date.UTC(new Date(lastT * 1000).getUTCFullYear(), 0, 1) / 1000);
   else from = engine.t2l(lastT - spec * 86400);
   chart.timeScale().setVisibleLogicalRange({ from: Math.max(from, -5), to: n - 1 + 6 });
-});
+}
 
 function renderScaleBtns() {
   const mode = chart.priceScale('right').options().mode;
@@ -820,10 +927,23 @@ function setScaleMode(m) {
   store.set('scaleMode', next);
   renderScaleBtns();
 }
+// set the price scale by name (from Claude's "show chart" or the URL): linear, log or percent
+function setScaleByName(name) {
+  const m = { linear: 0, log: 1, percent: 2 }[name];
+  if (m === undefined) return;
+  chart.priceScale('right').applyOptions({ mode: m });
+  store.set('scaleMode', m);
+  renderScaleBtns();
+}
 $('#pctBtn').onclick = () => setScaleMode(2);
 $('#logBtn').onclick = () => setScaleMode(1);
 $('#autoBtn').onclick = () => { chart.priceScale('right').applyOptions({ autoScale: true }); renderScaleBtns(); };
 // pre-market / after hours on-off (TradingView "Extended trading hours")
+$('#rainbowBtn').onclick = () => {
+  state.rainbow = !state.rainbow;
+  store.set('rainbow', state.rainbow);
+  updateRainbow();
+};
 const renderExtBtn = () => $('#extBtn').classList.toggle('on', state.ext);
 $('#extBtn').onclick = () => {
   state.ext = !state.ext;
@@ -1668,7 +1788,8 @@ renderScaleBtns();
 tickClock();
 setInterval(tickClock, 1000);
 loadWatchlist();
-loadChart();
+// ?range=All&scale=log in the address also set the date range and price scale
+loadChart().then(() => showRangeAndScale(urlParams.get('range') || '', urlParams.get('scale') || ''));
 // warm up the symbol library in the background so search is ready when opened
 setTimeout(() => { fetch('/api/search?q=&cat=crypto').catch(() => {}); }, 1500);
 setInterval(liveUpdate, 20000);

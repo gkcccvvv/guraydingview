@@ -669,15 +669,28 @@ def delete_drawings(args):
     return msg
 
 
+RANGES = ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "All"]
+SCALES = ["linear", "log", "percent"]
+
+
 def open_chart(args):
     sym = req_str(args, "symbol").upper()
     iv = interval_arg(args, None) if args.get("interval") else ""
+    rng = args.get("range") or ""
+    scale = args.get("scale") or ""
+    if rng and rng not in RANGES:
+        raise ToolError(f"range must be one of {', '.join(RANGES)}")
+    if scale and scale not in SCALES:
+        raise ToolError(f"scale must be one of {', '.join(SCALES)}")
     j = call("GET", f"/api/bars?symbol={q(sym)}&interval={iv or '1d'}")  # check it has data first
-    r = call("POST", f"/api/show?symbol={q(sym)}&interval={q(iv)}")
+    extra = "".join(f"&{k}={q(v)}" for k, v in (("interval", iv), ("range", rng), ("scale", scale)) if v)
+    r = call("POST", f"/api/show?symbol={q(sym)}{extra}")
     name = f"{sym} ({j.get('name', '')})"
+    how = ", ".join(x for x in (f"{iv} interval" if iv else "", f"range {rng}" if rng else "",
+                                f"{scale} scale" if scale else "") if x)
     if r.get("tabs"):
-        return f"Switched the open chart to {name}" + (f" on the {iv} interval." if iv else ".")
-    url = f"{BASE}/?symbol={q(sym)}" + (f"&interval={q(iv)}" if iv else "")
+        return f"Switched the open chart to {name}" + (f" ({how})." if how else ".")
+    url = f"{BASE}/?symbol={q(sym)}{extra}"
     webbrowser.open(url)
     return f"No chart tab was open, so {name} was opened in the browser: {url}"
 
@@ -804,9 +817,14 @@ TOOL_LIST = [
          "required": ["symbol"]},
      "annotations": {"readOnlyHint": False, "destructiveHint": True}},
     {"name": "open_chart", "title": "Show a chart",
-     "description": "Show a symbol (and optionally an interval) in the user's open chart tab, or open it in the "
-                    "browser if no tab is open.",
-     "inputSchema": {"type": "object", "properties": {"symbol": SYMBOL, "interval": INTERVAL}, "required": ["symbol"]},
+     "description": "Show a symbol in the user's open chart tab (or open it in the browser if no tab is open), "
+                    "optionally with an interval, a date range (like the range buttons; All = the whole history) "
+                    "and a price scale (log suits long histories such as BTC since 2010).",
+     "inputSchema": {"type": "object", "properties": {
+         "symbol": SYMBOL, "interval": INTERVAL,
+         "range": {"type": "string", "enum": RANGES},
+         "scale": {"type": "string", "enum": SCALES}},
+         "required": ["symbol"]},
      "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True}},
 ]
 HANDLERS = {"get_bars": get_bars, "get_quotes": get_quotes, "search_symbols": search_symbols,

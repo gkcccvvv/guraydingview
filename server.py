@@ -397,6 +397,76 @@ def fetch_binance(pair, base, short):
     return dedupe(bars), {"name": pair, "exchange": "Binance", "currency": "USDT"}
 
 
+# Binance only starts in August 2017. For these pairs the daily history is extended backwards with Yahoo
+# (OHLC, BTC from 2014) and before that Coin Metrics' free community data (daily close; BTC from July 2010).
+CRYPTO_HISTORY = {"BTCUSDT": ("BTC-USD", "btc"), "ETHUSDT": ("ETH-USD", "eth")}
+COINMETRICS_URL = "https://raw.githubusercontent.com/coinmetrics/data/master/csv/{}.csv"
+
+
+def coinmetrics_daily(asset):
+    """Daily USD price from github.com/coinmetrics/data (close only: each bar opens at the previous close)."""
+    rows = csv.reader(io.StringIO(http_get(COINMETRICS_URL.format(asset), timeout=60).decode("utf-8")))
+    head = next(rows)
+    ti, pi = head.index("time"), head.index("PriceUSD")
+    bars, prev = [], None
+    for r in rows:
+        try:
+            c = float(r[pi])
+            t = int(datetime.strptime(r[ti][:10], "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+        except (ValueError, IndexError):
+            continue
+        o = c if prev is None else prev
+        bars.append([t, o, max(o, c), min(o, c), c])
+        prev = c
+    return bars
+
+
+def crypto_history(pair):
+    yahoo, asset = CRYPTO_HISTORY[pair]
+    try:
+        y, _ = fetch_yahoo(yahoo, "1d", False)
+    except Exception:
+        y = []
+    try:
+        cm = coinmetrics_daily(asset)
+    except Exception:
+        cm = []
+    first = y[0][0] if y else float("inf")
+    bars = [b for b in cm if b[0] < first] + y
+    if not bars:
+        raise RuntimeError("no older history")  # not cached: tried again next time
+    return bars
+
+
+# Bitcoin rainbow chart: a log regression of the price against the age of the network,
+# log10(price) = a * ln(days since the genesis block) + b, with 9 equal-width bands (in log10) from the lowest to
+# the highest point of the history since 2011 (the thin trading of 2010 is left out of the fit).
+GENESIS = int(datetime(2009, 1, 3, tzinfo=timezone.utc).timestamp())
+RAINBOW_FROM = int(datetime(2011, 1, 1, tzinfo=timezone.utc).timestamp())
+RAINBOW_BANDS = [("Basically a Fire Sale", "#3949ab"), ("BUY!", "#1e88e5"), ("Accumulate", "#00acc1"),
+                 ("Still cheap", "#43a047"), ("HODL!", "#9ccc65"), ("Is this a bubble?", "#fdd835"),
+                 ("FOMO intensifies", "#fb8c00"), ("Sell. Seriously, SELL!", "#f4511e"),
+                 ("Maximum Bubble Territory", "#c62828")]
+
+
+def rainbow_params():
+    def fit():
+        import math
+        _, bars = get_series("BTCUSD", "1d")
+        pts = [(math.log((b[0] - GENESIS) / DAY), math.log10(b[4])) for b in bars if b[0] >= RAINBOW_FROM and b[4] > 0]
+        n = len(pts)
+        mx, my = sum(x for x, _ in pts) / n, sum(y for _, y in pts) / n
+        a = sum((x - mx) * (y - my) for x, y in pts) / sum((x - mx) ** 2 for x, _ in pts)
+        b = my - a * mx
+        res = [y - (a * x + b) for x, y in pts]
+        lo, hi = min(res) - 0.02, max(res) + 0.02
+        k = len(RAINBOW_BANDS)
+        return {"a": a, "b": b, "genesis": GENESIS, "edges": [lo + (hi - lo) * i / k for i in range(k + 1)],
+                "names": [nm for nm, _ in RAINBOW_BANDS], "colors": [c for _, c in RAINBOW_BANDS],
+                "fit": f"log10(price) = {a:.4f} * ln(days since 2009-01-03) {b:+.4f}, daily closes since 2011"}
+    return cached(("rainbow",), DAY, fit)
+
+
 def fetch_fred(sid):
     url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=" + urllib.parse.quote(sid, safe="")
     try:
@@ -885,6 +955,12 @@ def load(spec, base, short, ext=False):
             bars, info = fetch_yahoo(spec["code"], base, short, ext)
         elif src == "binance":
             bars, info = fetch_binance(spec["code"], base, short)
+            if base == "1d" and not short and spec["code"] in CRYPTO_HISTORY:
+                try:
+                    old = cached(("history", spec["code"]), DAY, lambda: crypto_history(spec["code"]))
+                    bars = [b for b in old if b[0] < bars[0][0]] + bars
+                except Exception as e:
+                    print(f"Older {spec['code']} history unavailable: {e!r}")
         elif src == "fred":
             bars, info = fetch_fred(spec["code"])
         elif src == "evds":
@@ -1277,6 +1353,9 @@ def publish(event):
         _ev_cond.notify_all()
 
 
+SHOW_RANGES = {"1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "ALL"}  # the range buttons under the chart
+
+
 def drawing_revs():
     return {k: int(v) for k, v in read_json(DRAWINGS_FILE, {}).get(REV_KEY, {}).items()}
 
@@ -1515,10 +1594,14 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(evds_test())
             if u.path == "/api/evds/find":
                 return self.send_json(evds_find(sym_key(arg("seed"))))
+            if u.path == "/api/rainbow":
+                return self.send_json(rainbow_params())
             if u.path == "/api/show" and method == "POST":
                 # switch the open chart tab to a symbol (used by the Claude connector)
-                iv = arg("interval")
-                publish({"type": "show", "symbol": sym_key(arg("symbol")), "interval": iv if iv in INTERVALS else ""})
+                iv, rng, scale = arg("interval"), arg("range"), arg("scale")
+                publish({"type": "show", "symbol": sym_key(arg("symbol")), "interval": iv if iv in INTERVALS else "",
+                         "range": rng if rng.upper() in SHOW_RANGES else "",
+                         "scale": scale if scale in ("linear", "log", "percent") else ""})
                 with _ev_cond:
                     return self.send_json({"ok": True, "tabs": _ev["clients"]})
             return self.send_json({"error": "unknown endpoint"}, 404)

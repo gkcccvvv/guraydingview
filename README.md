@@ -22,6 +22,8 @@ supply…) on one screen — draw as many trend lines, Fibonacci levels, channel
 - **Macro data:** FRED, ISM (PMI, New Orders, Inventories, Employment), Turkish central bank EVDS (M1, M2 and any series).
 - **Your own data:** drag & drop a CSV file onto the chart.
 - **Chart style:** candle / line colors, background, grid, last price line, pre-market / after-hours colors — with opacity.
+- **Bitcoin rainbow chart:** on BTC charts, colored log-regression bands behind the price, from 2010 into the future
+  (**Rainbow** button in the bottom bar). The fit is recomputed daily from the whole history; a meme heuristic, not advice.
 - **Claude connector:** ask Claude to read your charts and watchlist, draw support / resistance, trend lines and
   Fibonacci levels, or switch the chart you are looking at — changes show up in the open chart right away.
 - **No console window (Windows):** an icon next to the clock with a right-click menu — open, restart, refresh data,
@@ -81,7 +83,7 @@ If Guraydingview is not running, the connector starts it. What Claude can do:
 | `search_symbols` | find tickers |
 | `get_watchlist`, `edit_watchlist` | read the watchlist; add, move, remove symbols and sections |
 | `list_drawings`, `add_drawings`, `update_drawings`, `delete_drawings` | read and draw trend lines, levels, channels, boxes, Fibonacci, date ranges, notes |
-| `open_chart` | switch your open chart to a symbol / interval |
+| `open_chart` | switch your open chart to a symbol / interval, optionally a date range (All…) and log scale |
 
 Try: *"Draw the main support and resistance levels on GOOGL's weekly chart"*, *"Mark the periods when USBCOI was
 below 50"*, *"How did BTC do while the Fed balance sheet (WALCL) was shrinking?"*, *"Summarize today's moves in my
@@ -98,7 +100,7 @@ Click the magnifier (top left) or just start typing on the chart.
 |---|---|
 | `GOOGL`, `VT`, `THYAO.IS`, `EURUSD=X`, `^GSPC` | Yahoo Finance |
 | `GOLD`, `SILVER`, `USDTRY`, `XU030`, `SPX`, `DXY` | Yahoo (short names) |
-| `BTCUSD`, `ETHUSDT`, `BINANCE:SOLUSDT` | Binance |
+| `BTCUSD`, `ETHUSDT`, `BINANCE:SOLUSDT` | Binance (`BTCUSD` / `ETHUSD` daily+ extended back to 2010 / 2015 with Yahoo and Coin Metrics) |
 | `WALCL`, `USM2`, `TCU`, `M2V`, `FRED:UNRATE` | FRED |
 | `USBCOI`, `USMNO`, `USISMMI`, `USISMEMP` | ISM Manufacturing (PMI, New Orders, Inventories, Employment) |
 | `TRM1`, `TRM2`, `EVDS:TP.DK.USD.A.YTL` | TCMB EVDS (free API key needed) |
@@ -136,11 +138,14 @@ Rows: `date,value` or `date,open,high,low,close`, separated by `,` or `;`. Dates
 - **↑ / ↓:** previous / next symbol in the watchlist · all shortcuts: **?** (top right)
 - Bottom bar: **ETH** (pre-market / after hours), **%**, **log**, **auto** scale.
 - ⚙ → **Chart style:** line / candle colors, background, grid, last price line, pre-market / after-hours colors.
-- Open a chart directly: `http://127.0.0.1:8765/?symbol=GOOGL&interval=1h`
+- Open a chart directly: `http://127.0.0.1:8765/?symbol=GOOGL&interval=1h` — add `&range=All&scale=log` for the
+  whole history on a log scale (`range`: 1D … 5Y, All · `scale`: linear, log, percent)
 
 ## Data sources and notes
 
 - Prices: public **Yahoo Finance** and **Binance** endpoints; macro: **FRED**, **TCMB EVDS**, ism-feed.
+  Early BTC / ETH prices (before Yahoo's data starts): [Coin Metrics community data](https://github.com/coinmetrics/data)
+  (daily close; free for non-commercial use).
   The Yahoo endpoints are not official or documented and may change.
 - Symbol lists: [rreichel3/US-Stock-Symbols](https://github.com/rreichel3/US-Stock-Symbols) and Binance `exchangeInfo`.
   Logos are fetched on first use from financialmodelingprep / parqet / spothq cryptocurrency-icons / CoinCap /
