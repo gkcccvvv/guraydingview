@@ -216,12 +216,26 @@ function rememberInterval(sym, iv) {
   store.set('intervals', symIntervals);
 }
 
+// The chart type (candles, bars, line) is kept per symbol too; candles for one never set.
+const TYPES = ['candles', 'bars', 'line'];
+const symTypes = store.get('chartTypes', {});
+const typeFor = (sym) => (TYPES.includes(symTypes[symKey(sym)]) ? symTypes[symKey(sym)] : 'candles');
+function rememberType(sym, type) {
+  symTypes[symKey(sym)] = type;
+  store.set('chartTypes', symTypes);
+}
+
 const startSymbol = (urlParams.get('symbol') || store.get('symbol', 'BTCUSD')).toUpperCase();
 if (IVS.includes(urlParams.get('interval'))) rememberInterval(startSymbol, urlParams.get('interval'));
+{ // one chart type used to apply to every symbol: the chart open now keeps it, the others start from candles
+  const old = store.get('chartType', null);
+  if (TYPES.includes(old) && old !== 'candles' && !symTypes[symKey(startSymbol)]) rememberType(startSymbol, old);
+  try { localStorage.removeItem('gm.chartType'); } catch (_) { /* ignore */ }
+}
 const state = {
   symbol: startSymbol,
   interval: intervalFor(startSymbol),
-  chartType: store.get('chartType', 'candles'),
+  chartType: typeFor(startSymbol),
   scaleMode: store.get('scaleMode', 0),
   ext: store.get('extHours', true), // pre-market / after hours (extended session)
   rainbow: urlParams.get('rainbow') === '1' || store.get('rainbow', true), // Bitcoin rainbow bands (BTC charts)
@@ -933,6 +947,8 @@ async function showChart(sym, iv, range = '', scale = '') {
   if (sym !== symKey(state.symbol)) {
     state.symbol = sym;
     store.set('symbol', sym);
+    state.chartType = typeFor(sym);
+    renderTypes();
     engine.setTool('cursor');
     changed = true;
   }
@@ -1222,8 +1238,10 @@ function openSymbol(sym) {
   if (!sym) return;
   state.symbol = sym;
   store.set('symbol', sym);
-  state.interval = intervalFor(sym); // the interval this symbol was last looked at in
+  state.interval = intervalFor(sym); // the interval and chart type this symbol was last looked at in
+  state.chartType = typeFor(sym);
   renderIntervals();
+  renderTypes();
   engine.setTool('cursor');
   loadChart();
   renderWatchlist();
@@ -1310,7 +1328,7 @@ $('#typeBox').addEventListener('click', (e) => {
   const b = e.target.closest('[data-type]');
   if (!b) return;
   state.chartType = b.dataset.type;
-  store.set('chartType', state.chartType);
+  rememberType(state.symbol, state.chartType);
   renderTypes();
   const r = chart.timeScale().getVisibleLogicalRange();
   rebuildSeries();
