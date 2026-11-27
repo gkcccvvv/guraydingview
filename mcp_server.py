@@ -67,7 +67,8 @@ Guraydingview is the user's own TradingView-style charting app running on their 
 market and macro data, read and edit the user's watchlist, read and draw on the user's charts, and pin news to them.
 
 Symbols: tickers such as GOOGL, VT, BTCUSD, GOLD, SILVER, XU030, USDTRY; macro series such as WALCL (Fed balance
-sheet), USM2, M2V, TCU, USBCOI (ISM manufacturing PMI), USMNO (ISM new orders), USISMMI, TRM1/TRM2 (Turkish M1/M2);
+sheet), USM2, M2V, TCU, USCAPEX (core capex orders), USBCOI (ISM manufacturing PMI), USMNO (ISM new orders),
+USISMMI (ISM inventories), USISMSD (ISM supplier deliveries), USMNOINV (ISM new orders minus inventories), TRM1/TRM2 (Turkish M1/M2);
 ratios of two symbols such as GOLD/SILVER; FRED:CODE and EVDS:CODE for other series. Use search_symbols when unsure.
 
 Times: daily and longer bars are dated YYYY-MM-DD; intraday times are chart time (Istanbul, UTC+3).

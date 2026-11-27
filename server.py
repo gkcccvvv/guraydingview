@@ -86,6 +86,8 @@ ALIASES = {
     "TCU": ("fred", "TCU", "US capacity utilization", 1),
     "M2V": ("fred", "M2V", "M2 money velocity", 1),
     "UNRATE": ("fred", "UNRATE", "US unemployment rate", 1),
+    # Census durable goods report: nondefense capital goods excluding aircraft, new orders (million USD)
+    "USCAPEX": ("fred", "NEWORDER", "US core capex orders (nondefense capital goods ex aircraft)", 1e6),
     "SHILLER": ("multpl", "shiller-pe", "Shiller CAPE (S&P 500)", 1),
     # ISM Manufacturing (since 2013, from GitHub ism-feed, updated monthly from the ISM release).
     # A file with the same name in data/csv (e.g. a longer history) takes priority.
@@ -93,6 +95,8 @@ ALIASES = {
     "USMNO": ("ism", "New Orders", "US ISM Manufacturing New Orders", 1),
     "USISMMI": ("ism", "Inventories", "US ISM Manufacturing Inventories", 1),
     "USISMEMP": ("ism", "Employment", "US ISM Manufacturing Employment", 1),
+    "USISMSD": ("ism", "Supplier Deliveries", "US ISM Manufacturing Supplier Deliveries", 1),
+    "USMNOINV": ("ism", "New Orders - Inventories", "US ISM Manufacturing New Orders minus Inventories", 1),
 }
 ISM_FEED_URL = "https://raw.githubusercontent.com/sofiaverma06/ism-feed/main/ism_history.csv"
 
@@ -649,12 +653,20 @@ def _ism_rows(text, column):
     return bars
 
 
-def fetch_ism(column):
-    """ISM Manufacturing: GitHub ism-feed since 2013 (updated monthly) + the 1959–2016 FRED-MD history if present."""
+def _ism_feed_text():
     try:
-        text = http_get(ISM_FEED_URL).decode("utf-8-sig", "replace")
+        return http_get(ISM_FEED_URL).decode("utf-8-sig", "replace")
     except Exception as e:
         raise SymbolError(f"Could not reach ISM data ({e.__class__.__name__})")
+
+
+def fetch_ism(column):
+    """ISM Manufacturing: GitHub ism-feed since 2013 (updated monthly) + the 1959–2016 FRED-MD history if present."""
+    if column in ISM_SPREADS:
+        return fetch_ism_spread(column)
+    if column in ISM_EXTRA:
+        return fetch_ism_extra(column)
+    text = cached(("ism-feed",), 600, _ism_feed_text)
     bars = _ism_rows(text, column)
     if not bars:
         raise SymbolError(f"ISM data has no '{column}' column")
@@ -671,6 +683,161 @@ def fetch_ism(column):
             old = [b for b in _ism_rows(f.read(), column) if b[0] < feed_start]  # overlapping months: the current source wins
         bars = old + bars
     return dedupe(bars), {"name": column, "exchange": "Institute for Supply Management", "currency": ""}
+
+
+# One ISM index minus another, month by month: New Orders - Inventories shows how much of the demand
+# is left once stock-building ends.
+ISM_SPREADS = {"New Orders - Inventories": ("New Orders", "Inventories")}
+
+
+def fetch_ism_spread(column):
+    a_col, b_col = ISM_SPREADS[column]
+    a, _ = fetch_ism(a_col)
+    b = {t: c for t, _o, _h, _l, c in fetch_ism(b_col)[0]}
+    bars = []
+    for t, _o, _h, _l, c in a:
+        if t in b:
+            v = round(c - b[t], 1)
+            bars.append([t, v, v, v, v])
+    if not bars:
+        raise SymbolError(f"ISM {a_col} and {b_col} have no common months")
+    return bars, {"name": column, "exchange": "Institute for Supply Management", "currency": ""}
+
+
+# ISM indexes that ism-feed does not carry. History: the DBnomics copy of the ISM indexes (2021-01 to 2025-12;
+# DBnomics stopped updating it). Later months: ISM's monthly press release on PR Newswire, whose
+# "Manufacturing at a Glance" table also restates the month before. Months already read are kept in
+# data/ism_extra.csv, so each release is downloaded once.
+ISM_EXTRA = {"Supplier Deliveries": "supdel"}  # table row -> DBnomics dataset
+ISM_EXTRA_FILE = os.path.join(DATA_DIR, "ism_extra.csv")
+ISM_RELEASES_URL = "https://www.prnewswire.com/news/institute-for-supply-management/?page=1&pagesize=100"
+MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july",
+               "august", "september", "october", "november", "december"]
+_ism_extra_lock = threading.Lock()
+
+
+def _read_ism_extra():
+    """{(year, month): {row: value}} from data/ism_extra.csv."""
+    try:
+        with open(ISM_EXTRA_FILE, encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+    except OSError:
+        return {}
+    out = {}
+    head = rows[0] if rows else []
+    for r in rows[1:]:
+        m = re.match(r"^(\d{4})-(\d{2})", r[0]) if r else None
+        if not m:
+            continue
+        for c, v in zip(head[1:], r[1:]):
+            try:
+                out.setdefault((int(m[1]), int(m[2])), {})[c] = float(v)
+            except ValueError:
+                pass
+    return out
+
+
+def _write_ism_extra(data):
+    cols = [c for c in ISM_EXTRA if any(c in d for d in data.values())]
+    lines = ["date," + ",".join(cols)]
+    for (y, m), d in sorted(data.items()):
+        lines.append(f"{y}-{m:02d}-01," + ",".join(f"{d[c]:g}" if c in d else "" for c in cols))
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = ISM_EXTRA_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(tmp, ISM_EXTRA_FILE)
+
+
+def _dbnomics_ism(dataset):
+    """{(year, month): index} of an ISM Manufacturing index on DBnomics."""
+    url = f"https://api.db.nomics.world/v22/series/ISM/{dataset}/in?observations=1&format=json"
+    doc = json.loads(http_get(url))["series"]["docs"][0]
+    out = {}
+    for p, v in zip(doc["period"], doc["value"]):
+        m = re.match(r"^(\d{4})-(\d{2})$", str(p))
+        if m and isinstance(v, (int, float)):
+            out[(int(m[1]), int(m[2]))] = float(v)
+    return out
+
+
+def _parse_ism_glance(page, y, m):
+    """Current and prior-month values of the ISM_EXTRA rows from a release's "Manufacturing at a Glance" table."""
+    text = _cell(re.sub(r"(?is)<(script|style).*?</\1>", " ", page))
+    i = text.upper().find("MANUFACTURING AT A GLANCE")
+    if i < 0:
+        raise ValueError("no 'Manufacturing at a Glance' table")
+    seg = text[i:i + 2500]
+    hm = re.search(r"GLANCE\s+([A-Za-z]+)\s+(\d{4})\s+Index", seg, re.I)
+    if not hm or hm[1].lower() != MONTH_NAMES[m - 1] or int(hm[2]) != y:
+        raise ValueError(f"the table is not for {y}-{m:02d}")
+    num = r"(\d{1,2}(?:\.\d)?)"
+    cur, prev = {}, {}
+    for row in ISM_EXTRA:
+        mm = re.search(re.escape(row) + r"\s+" + num + r"\s+" + num, seg)
+        if not mm:
+            raise ValueError(f"no '{row}' row")
+        cur[row], prev[row] = float(mm[1]), float(mm[2])
+        if not all(10 <= v <= 95 for v in (cur[row], prev[row])):
+            raise ValueError(f"'{row}' values out of range: {mm[0]}")
+    return cur, prev
+
+
+def _ism_extra_from_releases(data, after):
+    """Read the ISM Manufacturing releases for months after `after` that data/ism_extra.csv lacks."""
+    listing = http_get(ISM_RELEASES_URL, YAHOO_UA).decode("utf-8", "replace")
+    releases = {}
+    for h in re.findall(r'href="(/news-releases/manufacturing-pmi-at-[^"]+)"', listing):
+        mm = re.search(r"-(" + "|".join(MONTH_NAMES) + r")-(\d{4})-", h)
+        if mm:
+            releases.setdefault((int(mm[2]), MONTH_NAMES.index(mm[1]) + 1), "https://www.prnewswire.com" + h)
+    changed = False
+    for (y, m), url in sorted(releases.items()):
+        if (y, m) <= after or all(c in data.get((y, m), {}) for c in ISM_EXTRA):
+            continue
+        try:
+            cur, prev = _parse_ism_glance(http_get(url, YAHOO_UA).decode("utf-8", "replace"), y, m)
+        except Exception as e:
+            print(f"ISM release {y}-{m:02d} unreadable: {e!r}")
+            continue
+        data.setdefault((y, m), {}).update(cur)
+        pym = (y - 1, 12) if m == 1 else (y, m - 1)
+        for c, v in prev.items():
+            data.setdefault(pym, {}).setdefault(c, v)
+        changed = True
+    return changed
+
+
+def fetch_ism_extra(column):
+    with _ism_extra_lock:
+        data = _read_ism_extra()
+        changed = False
+        if not any(column in d for d in data.values()):
+            try:
+                for ym, v in _dbnomics_ism(ISM_EXTRA[column]).items():
+                    data.setdefault(ym, {}).setdefault(column, v)
+                changed = True
+            except Exception as e:
+                print(f"DBnomics ISM {column} unavailable: {e!r}")
+        have = sorted(ym for ym, d in data.items() if column in d)
+        today = datetime.now(timezone.utc)
+        newest = (today.year - 1, 12) if today.month == 1 else (today.year, today.month - 1)  # last month ISM may have reported
+        if not have or have[-1] < newest:
+            try:
+                changed |= _ism_extra_from_releases(data, have[-1] if have else (0, 0))
+            except Exception as e:
+                print(f"ISM releases unavailable: {e!r}")
+        if changed:
+            _write_ism_extra(data)
+    bars = []
+    for (y, m), d in sorted(data.items()):
+        if column in d:  # dated on its release month, like the other ISM series
+            ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+            v = d[column]
+            bars.append([ts_of(ny, nm, 1), v, v, v, v])
+    if not bars:
+        raise SymbolError(f"Could not reach ISM {column} data")
+    return bars, {"name": column, "exchange": "Institute for Supply Management", "currency": ""}
 
 
 # ----------------------------------------------------------------------------

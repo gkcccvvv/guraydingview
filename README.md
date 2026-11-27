@@ -113,7 +113,9 @@ Click the magnifier (top left) or just start typing on the chart.
 | `GOLD`, `SILVER`, `USDTRY`, `XU030`, `SPX`, `DXY` | Yahoo (short names) |
 | `BTCUSD`, `ETHUSDT`, `BINANCE:SOLUSDT` | Binance (`BTCUSD` / `ETHUSD` daily+ extended back to 2010 / 2015 with Yahoo and Coin Metrics) |
 | `WALCL`, `USM2`, `TCU`, `M2V`, `FRED:UNRATE` | FRED |
-| `USBCOI`, `USMNO`, `USISMMI`, `USISMEMP` | ISM Manufacturing (PMI, New Orders, Inventories, Employment) |
+| `USCAPEX` | FRED `NEWORDER`: core capex orders (nondefense capital goods ex aircraft, Census durable goods report) |
+| `USBCOI`, `USMNO`, `USISMMI`, `USISMEMP`, `USISMSD` | ISM Manufacturing (PMI, New Orders, Inventories, Employment, Supplier Deliveries) |
+| `USMNOINV` | ISM New Orders minus Inventories |
 | `TRM1`, `TRM2`, `EVDS:TP.DK.USD.A.YTL` | TCMB EVDS (free API key needed) |
 | `GOLD/SILVER`, `XU030/USDTRY` | Ratio of two symbols |
 | Any name | `data/csv/NAME.csv`, or drag & drop a CSV |
@@ -129,6 +131,11 @@ Click the magnifier (top left) or just start typing on the chart.
 
 Since 2013 from [sofiaverma06/ism-feed](https://github.com/sofiaverma06/ism-feed) (updated automatically from ISM's
 monthly release). Values are placed on their release month, like TradingView.
+
+Supplier Deliveries (`USISMSD`) is not in ism-feed: its history since 2021 comes from
+[DBnomics](https://db.nomics.world/ISM/supdel), later months from ISM's own press releases on
+[PR Newswire](https://www.prnewswire.com/news/institute-for-supply-management/). Months already read are kept in
+`data/ism_extra.csv`, so each release is downloaded once.
 
 **1959–2012 history (optional):** download "Historical Vintages of FRED-MD 2015-01 to 2025-12 (.zip)" from the
 [FRED-MD page](https://www.stlouisfed.org/research/economists/mccracken/fred-databases) with your browser. The app
