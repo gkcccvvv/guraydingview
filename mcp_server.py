@@ -37,6 +37,7 @@ BASE = f"http://127.0.0.1:{PORT}"
 SERVER_NAME = "guraydingview"
 VERSION = "1.1.0"
 CHART_TZ = timedelta(hours=3)  # the chart shows intraday times in Istanbul time (UTC+3), see TZ in static/app.js
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 INTERVALS = ["15m", "1h", "4h", "1d", "1w", "1M"]
 INTRADAY = {"15m", "1h", "4h"}
 
@@ -201,7 +202,7 @@ def signed(v, pct=False, ref=None):
 
 
 def fmt_time(t, intraday=None):
-    dt = datetime.fromtimestamp(t, timezone.utc)
+    dt = EPOCH + timedelta(seconds=t)  # fromtimestamp fails for negative (pre-1970) timestamps on Windows
     if intraday is None:
         intraday = t % 86400 != 0
     return (dt + CHART_TZ).strftime("%Y-%m-%d %H:%M") if intraday else dt.strftime("%Y-%m-%d")
