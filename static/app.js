@@ -196,9 +196,31 @@ const FX_FLAGS = {
 
 // ------------------------------------------------------------------ durum
 const urlParams = new URLSearchParams(location.search); // open directly with ?symbol=USMNO&interval=1w
+
+// Each symbol keeps its own interval. One without a remembered interval gets the interval of its most recently saved
+// view (from before intervals were remembered per symbol), or daily.
+const IVS = ['15m', '1h', '4h', '1d', '1w', '1M'];
+const symIntervals = store.get('intervals', {});
+function intervalFor(sym) {
+  const k = symKey(sym);
+  if (IVS.includes(symIntervals[k])) return symIntervals[k];
+  let best = null;
+  for (const [key, v] of Object.entries(store.get('views', {}))) {
+    const [s, iv] = key.split('|');
+    if (s === k && IVS.includes(iv) && (!best || (v.at || 0) > best.at)) best = { iv, at: v.at || 0 };
+  }
+  return best ? best.iv : '1d';
+}
+function rememberInterval(sym, iv) {
+  symIntervals[symKey(sym)] = iv;
+  store.set('intervals', symIntervals);
+}
+
+const startSymbol = (urlParams.get('symbol') || store.get('symbol', 'BTCUSD')).toUpperCase();
+if (IVS.includes(urlParams.get('interval'))) rememberInterval(startSymbol, urlParams.get('interval'));
 const state = {
-  symbol: (urlParams.get('symbol') || store.get('symbol', 'BTCUSD')).toUpperCase(),
-  interval: ['15m', '1h', '4h', '1d', '1w', '1M'].includes(urlParams.get('interval')) ? urlParams.get('interval') : store.get('interval', '1d'),
+  symbol: startSymbol,
+  interval: intervalFor(startSymbol),
   chartType: store.get('chartType', 'candles'),
   scaleMode: store.get('scaleMode', 0),
   ext: store.get('extHours', true), // pre-market / after hours (extended session)
@@ -906,18 +928,19 @@ window.addEventListener('beforeunload', () => { if (store.get('activeTab', null)
 markActiveTab();
 
 async function showChart(sym, iv, range = '', scale = '') {
-  sym = symKey(sym);
+  sym = symKey(sym) || symKey(state.symbol);
   let changed = false;
-  if (['15m', '1h', '4h', '1d', '1w', '1M'].includes(iv) && iv !== state.interval) {
-    state.interval = iv;
-    store.set('interval', iv);
-    renderIntervals();
-    changed = true;
-  }
-  if (sym && sym !== symKey(state.symbol)) {
+  if (sym !== symKey(state.symbol)) {
     state.symbol = sym;
     store.set('symbol', sym);
     engine.setTool('cursor');
+    changed = true;
+  }
+  if (IVS.includes(iv)) rememberInterval(sym, iv); // asked for an interval: it becomes this symbol's interval
+  const want = intervalFor(sym);
+  if (want !== state.interval) {
+    state.interval = want;
+    renderIntervals();
     changed = true;
   }
   if (changed) { renderWatchlist(); await loadChart(); }
@@ -1101,7 +1124,7 @@ async function loadChart({ keepView = false } = {}) {
   const symChanged = symKey(sym) !== engine._loadedSym;
   if (saveSym && symChanged) await flushSave();
 
-  // on interval change keep the right-edge time and the number of visible bars
+  // on an interval change to a chart without a saved view: keep the right-edge time and the number of visible bars
   let view = null;
   if (keepView && series && state.bars.length) {
     const r = chart.timeScale().getVisibleLogicalRange();
@@ -1151,10 +1174,13 @@ async function loadChart({ keepView = false } = {}) {
 
   const n = state.bars.length;
   const ts = chart.timeScale();
-  if (view) {
+  if (restoreView(viewKey())) {
+    // this symbol + interval as it was left: zoom, scroll and price scale
+  } else if (view) {
+    setAutoScale();
     const r = engine.t2l(view.right);
     ts.setVisibleLogicalRange({ from: r - view.width, to: r });
-  } else if (!restoreView(viewKey())) {
+  } else {
     // first visit: latest bars, automatic price scale (don't carry another symbol's manual range)
     setAutoScale();
     const w = j.kind === 'line' ? Math.min(n, 400) : Math.min(n, 180);
@@ -1196,6 +1222,8 @@ function openSymbol(sym) {
   if (!sym) return;
   state.symbol = sym;
   store.set('symbol', sym);
+  state.interval = intervalFor(sym); // the interval this symbol was last looked at in
+  renderIntervals();
   engine.setTool('cursor');
   loadChart();
   renderWatchlist();
@@ -1204,9 +1232,9 @@ function openSymbol(sym) {
 function setInterval_(iv) {
   if (iv === state.interval) return;
   state.interval = iv;
-  store.set('interval', iv);
+  rememberInterval(state.symbol, iv);
   renderIntervals();
-  loadChart({ keepView: true });
+  loadChart({ keepView: true }); // the saved view of this interval if there is one, otherwise the same time window
 }
 
 // ------------------------------------------------------------------ legend / detay

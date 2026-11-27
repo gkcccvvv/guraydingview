@@ -12,8 +12,9 @@ supply…) on one screen — draw as many trend lines, Fibonacci levels, channel
   ellipse, Fibonacci retracement, date range, text, measure. Saved per symbol; they stay in place when you change the interval.
 - **TradingView-like styling:** line color / opacity / width / style, background color and opacity, text on any
   drawing (color, size, bold / italic, alignment), lock, undo / redo, copy / paste.
-- **Remembers your view:** every chart (symbol + interval) reopens exactly how you left it — zoom, scroll and a
-  manually adjusted price scale.
+- **Remembers your view:** each symbol opens in the interval you last used for it, and every chart (symbol +
+  interval) reopens exactly how you left it — zoom, scroll and a manually adjusted price scale — also when you switch
+  intervals back and forth.
 - **Watchlist:** sections, drag & drop ordering, logos and flags, live price and change.
 - **Symbol search** with categories (Stocks, Funds, Futures, Forex, Crypto, Indices, Economy): all US stocks and
   every Binance USDT pair.
